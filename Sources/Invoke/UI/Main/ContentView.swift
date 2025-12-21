@@ -5,55 +5,64 @@ struct ContentView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // === 1. Top Bar: Project & Status ===
+            // === 1. Header ===
             HStack {
-                // Status Light
+                // Status Dot
                 Circle()
                     .fill(logic.isListening ? Color.green : Color.orange)
                     .frame(width: 8, height: 8)
                     .shadow(color: logic.isListening ? .green : .clear, radius: 4)
                 
-                Text(logic.isListening ? "Running" : "Paused")
+                Text(logic.isListening ? "Live" : "Standby")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(logic.isListening ? .green : .secondary)
                 
                 Spacer()
                 
-                // Project Selector
+                // Project Path (Clickable)
                 Button(action: logic.selectProjectRoot) {
                     HStack(spacing: 4) {
                         Image(systemName: "folder.fill")
-                        Text(logic.projectRoot.isEmpty ? "Select Project" : URL(fileURLWithPath: logic.projectRoot).lastPathComponent)
+                        Text(logic.projectRoot.isEmpty ? "Select Project..." : URL(fileURLWithPath: logic.projectRoot).lastPathComponent)
                             .truncationMode(.middle)
                     }
-                    .font(.system(size: 10))
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
-                .padding(4)
-                .background(Color.white.opacity(0.1))
-                .cornerRadius(4)
+                
+                Spacer()
+                
+                // Quit Button (Top Right, safe distance)
+                Button(action: { NSApplication.shared.terminate(nil) }) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(.gray)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
             }
-            .padding(10)
+            .padding(12)
             .background(.ultraThinMaterial)
             
-            // === 2. Middle: Log List ===
+            // === 2. Log Stream ===
             ZStack {
-                Color.black.opacity(0.8)
+                Color.black.opacity(0.85)
                 
                 if logic.changeLogs.isEmpty {
-                    VStack(spacing: 6) {
-                        Text("Ready to Code")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white)
-                        Text("Step 1: Click 'Copy Context' & paste to Gemini.\nStep 2: Turn on 'Auto-Paste Mode'.")
-                            .font(.system(size: 10))
+                    VStack(spacing: 8) {
+                        Image(systemName: "arrow.down.circle")
+                            .font(.system(size: 24))
+                            .foregroundColor(.gray.opacity(0.5))
+                        Text("Ready to Pair")
+                            .font(.system(size: 11, weight: .medium))
                             .foregroundColor(.gray)
-                            .multilineTextAlignment(.center)
                     }
                 } else {
                     List {
                         ForEach(logic.changeLogs) { log in
-                            LogRows(log: log, onValidate: {
+                            LogRows(log: log, onVerify: {
                                 logic.validateCommit(log)
                             }, onToggleStatus: {
                                 logic.toggleValidationStatus(for: log.id)
@@ -63,61 +72,78 @@ struct ContentView: View {
                     .listStyle(.plain)
                 }
             }
-            .frame(height: 140)
+            .frame(height: 150)
             
-            // === 3. Bottom: Action Buttons ===
+            // === 3. Action Bar (Jobs Style) ===
             HStack(spacing: 0) {
-                // Button 1: Copy Context
-                WorkflowButton(icon: "doc.on.doc.fill", label: "1. Copy Context", color: .blue) {
+                // Button 1: PAIR
+                ActionButton(
+                    title: "Pair",
+                    icon: "link",
+                    color: .blue,
+                    isActive: false
+                ) {
                     logic.copyProtocol()
                 }
                 
-                Divider().frame(height: 20)
+                Divider().frame(height: 24).opacity(0.3)
                 
-                // Button 2: Auto-Paste Mode
-                WorkflowButton(
-                    icon: logic.isListening ? "pause.circle.fill" : "play.circle.fill",
-                    label: logic.isListening ? "Stop" : "2. Auto-Paste Mode",
-                    color: logic.isListening ? .green : .gray
+                // Button 2: SYNC (Toggle)
+                ActionButton(
+                    title: logic.isListening ? "Syncing..." : "Sync",
+                    icon: logic.isListening ? "arrow.triangle.2.circlepath.circle.fill" : "arrow.triangle.2.circlepath.circle",
+                    color: logic.isListening ? .green : .white,
+                    isActive: logic.isListening
                 ) {
                     logic.toggleListening()
                 }
-                
-                Divider().frame(height: 20)
-                
-                // Quit Button (Replacement for Settings)
-                Button(action: { NSApplication.shared.terminate(nil) }) {
-                    Image(systemName: "power")
-                        .font(.system(size: 10))
-                        .foregroundColor(.red.opacity(0.8))
-                        .frame(width: 30, height: 40)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Quit App")
             }
-            .frame(height: 40)
-            .background(Color.gray.opacity(0.1))
+            .frame(height: 48)
+            .background(Color(white: 0.15))
         }
-        .frame(width: 340) // Slightly wider for better text fit
-        .cornerRadius(12)
+        .frame(width: 320)
+        .cornerRadius(14)
     }
 }
 
-// MARK: - Subviews
+// MARK: - Components
+
+struct ActionButton: View {
+    let title: String
+    let icon: String
+    let color: Color
+    let isActive: Bool
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 14))
+                Text(title)
+                    .font(.system(size: 12, weight: .bold))
+            }
+            .foregroundColor(isActive ? .black : color)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(isActive ? color : Color.clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
 
 struct LogRows: View {
     let log: ChangeLog
-    let onValidate: () -> Void
+    let onVerify: () -> Void
     let onToggleStatus: () -> Void
     
     var body: some View {
         HStack(alignment: .center, spacing: 8) {
             // Commit Hash
             Text(log.commitHash)
-                .font(.system(size: 10, design: .monospaced))
+                .font(.system(size: 9, design: .monospaced))
                 .foregroundColor(.yellow)
-                .frame(width: 45, alignment: .leading)
+                .frame(width: 40, alignment: .leading)
             
             // Summary
             VStack(alignment: .leading, spacing: 2) {
@@ -132,60 +158,27 @@ struct LogRows: View {
             
             Spacer()
             
-            // Validation Controls
-            HStack(spacing: 0) {
-                Button(action: onValidate) {
-                    HStack(spacing: 2) {
-                        Image(systemName: "magnifyingglass")
-                        Text("Check")
-                    }
-                    .font(.system(size: 9))
+            // Verify Button
+            Button(action: onVerify) {
+                Text("Verify")
+                    .font(.system(size: 9, weight: .medium))
                     .foregroundColor(.blue)
-                    .padding(3)
-                    .background(Color.blue.opacity(0.1))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.blue.opacity(0.15))
                     .cornerRadius(4)
-                }
-                .buttonStyle(.plain)
-                .help("Ask Gemini to validate this commit")
-                .padding(.trailing, 8)
-                
-                Button(action: onToggleStatus) {
-                    Text(log.isValidated ? "PASS" : "WAIT")
-                        .font(.system(size: 8, weight: .bold))
-                        .foregroundColor(log.isValidated ? .green : .orange)
-                        .frame(width: 30)
-                        .padding(2)
-                        .background(log.isValidated ? Color.green.opacity(0.2) : Color.orange.opacity(0.2))
-                        .cornerRadius(3)
-                }
-                .buttonStyle(.plain)
             }
+            .buttonStyle(.plain)
+            
+            // Pass/Fail Status
+            Button(action: onToggleStatus) {
+                Image(systemName: log.isValidated ? "checkmark.circle.fill" : "circle")
+                    .foregroundColor(log.isValidated ? .green : .gray)
+                    .font(.system(size: 12))
+            }
+            .buttonStyle(.plain)
         }
         .listRowBackground(Color.clear)
-        .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 4, trailing: 8))
-    }
-}
-
-struct WorkflowButton: View {
-    let icon: String
-    let label: String
-    let color: Color
-    let action: () -> Void
-    
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                Text(label)
-            }
-            .font(.system(size: 11, weight: .medium))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(PlainButtonStyle())
-        .foregroundColor(color)
-        .onHover { inside in
-            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-        }
+        .listRowInsets(EdgeInsets(top: 6, leading: 10, bottom: 6, trailing: 10))
     }
 }
