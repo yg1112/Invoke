@@ -3,6 +3,7 @@ import AppKit
 import Combine
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    var statusItem: NSStatusItem?
     var floatingPanel: FloatingPanel?
     var settingsWindow: NSWindow?
     var onboardingWindow: NSWindow?
@@ -12,6 +13,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         print("✅ [APP] Launching Invoke")
         
+        setupMenuBarIcon()
+        
         let needsOnboarding = !UserDefaults.standard.bool(forKey: "HasCompletedOnboardingV1")
         
         if needsOnboarding {
@@ -19,6 +22,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             finishLaunch()
         }
+    }
+    
+    private func setupMenuBarIcon() {
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        
+        if let button = statusItem?.button {
+            let icon = NSImage(systemSymbolName: "hand.rays.fill", accessibilityDescription: "Invoke")
+            icon?.size = NSSize(width: 18, height: 18)
+            button.image = icon
+            button.action = #selector(togglePanel)
+            button.target = self
+        }
+        
+        let menu = NSMenu()
+        menu.addItem(NSMenuItem(title: "Show Panel", action: #selector(showPanel), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Settings", action: #selector(showSettings), keyEquivalent: ","))
+        menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quitApp), keyEquivalent: "q"))
+        
+        statusItem?.menu = menu
+    }
+    
+    @objc private func togglePanel() {
+        if let panel = floatingPanel, panel.isVisible {
+            panel.orderOut(nil)
+        } else {
+            floatingPanel?.orderFront(nil)
+        }
+    }
+    
+    @objc private func showPanel() {
+        floatingPanel?.orderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+    
+    @objc private func quitApp() {
+        NSApplication.shared.terminate(nil)
     }
     
     private func showOnboardingWindow() {
