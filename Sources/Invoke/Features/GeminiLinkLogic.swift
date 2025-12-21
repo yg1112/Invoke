@@ -34,27 +34,27 @@ class GeminiLinkLogic: ObservableObject {
         if !projectRoot.isEmpty { loadLogs() }
     }
     
-    // MARK: - File Selection (Fixed)
+    // MARK: - File Selection (Fixed & Stable)
     func selectProjectRoot() {
+        // 必须在主线程执行 UI 操作
         DispatchQueue.main.async {
             let panel = NSOpenPanel()
-            panel.canChooseFiles = false
-            panel.canChooseDirectories = true
+            panel.canChooseFiles = false      // 禁止选文件（会导致文件变灰，正常现象）
+            panel.canChooseDirectories = true // 只能选文件夹
             panel.allowsMultipleSelection = false
             panel.title = "Select Project Root"
-            panel.prompt = "Set as Root"
-            panel.treatsFilePackagesAsDirectories = true
-            panel.level = .modalPanel 
+            panel.prompt = "Set Root"
+            panel.treatsFilePackagesAsDirectories = false
             
-            panel.begin { response in
-                if response == .OK, let url = panel.url {
-                    DispatchQueue.main.async {
-                        self.projectRoot = url.path
-                    }
-                }
-            }
+            // ⚠️ 修复闪退的关键：
+            // 1. 先把 App 激活到前台
             NSApp.activate(ignoringOtherApps: true)
-            panel.makeKeyAndOrderFront(nil)
+            
+            // 2. 使用 runModal() 而不是 begin()
+            // runModal 会阻塞当前线程直到用户选择，这是最安全的方式
+            if panel.runModal() == .OK, let url = panel.url {
+                self.projectRoot = url.path
+            }
         }
     }
 
