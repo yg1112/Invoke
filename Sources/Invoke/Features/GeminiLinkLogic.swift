@@ -131,12 +131,24 @@ class GeminiLinkLogic: ObservableObject {
         
         guard let content = pasteboard.string(forType: .string) else { return }
         
-        // 🎯 检测 Shell 脚本格式 (cat << 'EOF' > file)
-        if content.contains("cat <<") && content.contains("EOF") {
-            print("🔍 Detected shell script format in clipboard!")
+        // 🎯 检测 Base64 单行流格式 (echo '...' | base64 -d > file)
+        if content.contains("base64 -d >") || content.contains("base64 -d>") {
+            print("🔍 Detected Base64 one-liner format!")
             print("📋 Content length: \(content.count) chars")
             
-            // 立刻恢复用户之前的剪贴板内容
+            restoreUserClipboardImmediately()
+            
+            DispatchQueue.main.async {
+                self.isProcessing = true
+                self.processingStatus = "Detecting code..."
+            }
+            
+            showNotification(title: "Code Detected", body: "Applying changes...")
+            processBase64OneLiner(content)
+            
+        } else if content.contains("cat <<") && content.contains("EOF") {
+            // 兼容 cat << EOF 格式
+            print("🔍 Detected shell script format!")
             restoreUserClipboardImmediately()
             
             DispatchQueue.main.async {
@@ -148,8 +160,8 @@ class GeminiLinkLogic: ObservableObject {
             processShellScript(content)
             
         } else if content.contains(markerStart) {
-            // 兼容旧的 Base64 格式
-            print("🔍 Detected Base64 protocol in clipboard!")
+            // 兼容旧的 Base64 标记格式
+            print("🔍 Detected legacy Base64 protocol!")
             restoreUserClipboardImmediately()
             
             DispatchQueue.main.async {
@@ -185,7 +197,79 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    // MARK: - 新格式：Shell 脚本解析 (cat << 'EOF' > file)
+    // MARK: - 新格式：Base64 单行流 (echo '...' | base64 -d > file)
+    
+    private func processBase64OneLiner(_ rawText: String) {
+        DispatchQueue.main.async {
+            self.processingStatus = "Parsing Base64 one-liners..."
+        }
+        
+        // 匹配格式: echo '<base64>' | base64 -d > path/to/file.swift
+        // 或者: echo "<base64>" | base64 -d > path/to/file.swift
+        let pattern = try! NSRegularExpression(
+            pattern: "echo\\s+['\"]([A-Za-z0-9+/=]+)['\"]\\s*\\|\\s*base64\\s+-d\\s*>\\s*([^\\n\\s]+)",
+            options: []
+        )
+        let matches = pattern.matches(in: rawText, options: [], range: NSRange(rawText.startIndex..<rawText.endIndex, in: rawText))
+        
+        if matches.isEmpty {
+            print("⚠️ No valid echo | base64 -d commands found")
+            print("📝 Content preview: \(String(rawText.prefix(500)))")
+            
+            DispatchQueue.main.async {
+                self.isProcessing = false
+                self.processingStatus = ""
+                self.showNotification(title: "Parse Error", body: "No valid Base64 one-liner found")
+            }
+            return
+        }
+        
+        print("✅ Found \(matches.count) file(s) to create/update")
+        DispatchQueue.main.async {
+            self.processingStatus = "Decoding \(matches.count) file(s)..."
+        }
+        
+        var updatedFiles: [String] = []
+        
+        for match in matches {
+            if let base64Range = Range(match.range(at: 1), in: rawText),
+               let pathRange = Range(match.range(at: 2), in: rawText) {
+                let base64String = String(rawText[base64Range])
+                let filePath = String(rawText[pathRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                print("📄 Processing: \(filePath)")
+                print("📦 Base64 length: \(base64String.count) chars")
+                
+                // 解码 Base64 为真实代码
+                if let data = Data(base64Encoded: base64String),
+                   let decodedContent = String(data: data, encoding: .utf8) {
+                    print("✅ Decoded to \(decodedContent.count) chars of code")
+                    
+                    if writeFileDirectly(relativePath: filePath, content: decodedContent) {
+                        updatedFiles.append(filePath)
+                    }
+                } else {
+                    print("❌ Failed to decode Base64 for: \(filePath)")
+                }
+            }
+        }
+        
+        if !updatedFiles.isEmpty {
+            DispatchQueue.main.async {
+                self.processingStatus = "Committing changes..."
+            }
+            let summary = "Update: \(updatedFiles.map { URL(fileURLWithPath: $0).lastPathComponent }.joined(separator: ", "))"
+            autoCommitAndPush(message: summary, summary: summary)
+        } else {
+            DispatchQueue.main.async {
+                self.isProcessing = false
+                self.processingStatus = ""
+                self.showNotification(title: "No Changes", body: "Failed to decode files")
+            }
+        }
+    }
+    
+    // MARK: - 兼容格式：Shell 脚本解析 (cat << 'EOF' > file)
     
     private func processShellScript(_ rawText: String) {
         DispatchQueue.main.async {
@@ -193,7 +277,6 @@ class GeminiLinkLogic: ObservableObject {
         }
         
         // 匹配格式: cat << 'EOF' > path/to/file.swift ... EOF
-        // 或者: cat <<'EOF' > path/to/file.swift ... EOF
         let pattern = try! NSRegularExpression(
             pattern: "cat\\s*<<\\s*'?EOF'?\\s*>\\s*([^\\n]+)\\n([\\s\\S]*?)\\nEOF",
             options: []
@@ -441,10 +524,22 @@ class GeminiLinkLogic: ObservableObject {
             return
         }
         
-        // 优先检测 Shell 脚本格式 (新格式)
-        if content.contains("cat <<") && content.contains("EOF") {
-            print("🔍 Found shell script format!")
+        // 优先检测 Base64 单行流格式 (最新格式)
+        if content.contains("base64 -d >") || content.contains("base64 -d>") {
+            print("🔍 Found Base64 one-liner format!")
             print("📋 Content length: \(content.count) chars")
+            
+            DispatchQueue.main.async {
+                self.isProcessing = true
+                self.processingStatus = "Manual apply..."
+            }
+            
+            showNotification(title: "Applying Code", body: "Decoding Base64...")
+            processBase64OneLiner(content)
+            
+        } else if content.contains("cat <<") && content.contains("EOF") {
+            // 兼容 cat << EOF 格式
+            print("🔍 Found shell script format!")
             
             DispatchQueue.main.async {
                 self.isProcessing = true
@@ -455,22 +550,21 @@ class GeminiLinkLogic: ObservableObject {
             processShellScript(content)
             
         } else if content.contains(markerStart) {
-            // 兼容旧的 Base64 格式
-            print("🔍 Found Base64 protocol markers!")
-            print("📋 Content length: \(content.count) chars")
+            // 兼容旧的 Base64 标记格式
+            print("🔍 Found legacy Base64 protocol!")
             
             DispatchQueue.main.async {
                 self.isProcessing = true
                 self.processingStatus = "Manual apply..."
             }
             
-            showNotification(title: "Applying Code", body: "Processing Base64 content...")
+            showNotification(title: "Applying Code", body: "Processing Base64...")
             processClipboardContent(content)
             
         } else {
             print("⚠️ No recognized format in clipboard")
             print("📋 Clipboard preview: \(String(content.prefix(200)))...")
-            showNotification(title: "No Code Found", body: "Expected: cat << 'EOF' > file format")
+            showNotification(title: "No Code Found", body: "Expected: echo '...' | base64 -d > file")
         }
     }
     
@@ -480,21 +574,18 @@ class GeminiLinkLogic: ObservableObject {
     func copyGemSetupGuide() {
         print("📖 Copying Gemini Personal Context instruction...")
         
-        // 最佳实践：Shell 脚本格式，直接粘贴到终端就能创建文件
+        // Base64 单行流格式 - 最省空间！
         let instruction = """
-        When I say @code, respond with ONLY a shell command to create the file:
-
-        ```bash
-        cat << 'EOF' > path/to/file.swift
-        <actual code here>
-        EOF
-        ```
-
+        When I say @code, provide a ONE-LINER shell command.
+        
+        Format: echo '<base64_string>' | base64 -d > path/to/file.swift
+        
         Rules:
-        - Multiple files = multiple cat commands in one code block
-        - NO explanation, NO comments outside the code block
-        - Use relative paths from project root
-        - For updates, only show changed functions (git diff style) unless I ask for full file
+        - Encode the COMPLETE file content into a single-line Base64 string
+        - Multiple files = multiple echo commands (each on its own line)
+        - The output block must be ONE code block, minimal height
+        - NO explanation, NO comments
+        - For updates to large files, only show changed functions unless I ask for full file
         """
         
         pasteboard.clearContents()
@@ -509,12 +600,11 @@ class GeminiLinkLogic: ObservableObject {
         
         // 🎯 保存当前用户剪贴板
         if let current = pasteboard.string(forType: .string),
-           !current.contains("cat <<") && !current.contains("EOF") {
+           !current.contains("echo") && !current.contains("base64") {
             lastUserClipboard = current
             lastUserClipboardTime = Date()
         }
         
-        // 超级简短！
         let prompt = "@code"
         
         pasteboard.clearContents()
