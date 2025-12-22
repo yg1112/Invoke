@@ -27,3 +27,11 @@ build/
 .DS_Store
 *.app
 dist/
+
+# Build artifacts and logs
+invoke_debug.log
+*.log
+Invoke.app/
+
+# Temporary test files
+test_*.sh

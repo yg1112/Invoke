@@ -36,30 +36,17 @@ class GeminiLinkLogic: ObservableObject {
     
     // MARK: - File Selection
     func selectProjectRoot() {
-        print("🔍 [DEBUG] selectProjectRoot called")
-        print("🔍 [DEBUG] Thread: \(Thread.current)")
-        print("🔍 [DEBUG] Is main thread: \(Thread.isMainThread)")
-        
         // Run on main thread
         guard Thread.isMainThread else {
-            print("⚠️ [DEBUG] Not on main thread, dispatching to main")
             DispatchQueue.main.async { [weak self] in
                 self?.selectProjectRoot()
             }
             return
         }
         
-        print("🔍 [DEBUG] Creating NSOpenPanel...")
         let panel = NSOpenPanel()
         
-        // Log app bundle info
-        if let bundleID = Bundle.main.bundleIdentifier {
-            print("🔍 [DEBUG] Bundle ID: \(bundleID)")
-        }
-        print("🔍 [DEBUG] App path: \(Bundle.main.bundlePath)")
-        
         // Basic configuration
-        print("🔍 [DEBUG] Configuring panel properties...")
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -77,66 +64,19 @@ class GeminiLinkLogic: ObservableObject {
         // Don't restrict to specific file types - allow all directories
         panel.allowsOtherFileTypes = true
         
-        // Log current window info
-        if let window = NSApp.keyWindow {
-            print("🔍 [DEBUG] Key window exists: \(window)")
-        } else {
-            print("⚠️ [DEBUG] No key window")
-        }
-        
-        if let window = NSApp.mainWindow {
-            print("🔍 [DEBUG] Main window exists: \(window)")
-        } else {
-            print("⚠️ [DEBUG] No main window")
-        }
-        
-        print("🔍 [DEBUG] NSApp is active: \(NSApp.isActive)")
-        print("🔍 [DEBUG] Activating app...")
+        // Activate app to bring panel to front
         NSApp.activate(ignoringOtherApps: true)
         
-        print("🔍 [DEBUG] Opening panel with runModal...")
-        print("🔍 [DEBUG] Panel configuration:")
-        print("  - canChooseFiles: \(panel.canChooseFiles)")
-        print("  - canChooseDirectories: \(panel.canChooseDirectories)")
-        print("  - allowsMultipleSelection: \(panel.allowsMultipleSelection)")
-        print("  - treatsFilePackagesAsDirectories: \(panel.treatsFilePackagesAsDirectories)")
-        print("  - allowsOtherFileTypes: \(panel.allowsOtherFileTypes)")
-        
-        // Try to get current directory
-        if let currentDir = FileManager.default.currentDirectoryPath as String? {
-            print("🔍 [DEBUG] Current directory: \(currentDir)")
-        }
-        
-        print("🔍 [DEBUG] Calling panel.runModal()...")
+        // Use runModal for synchronous behavior - reliable for .app bundles
         let response = panel.runModal()
-        print("🔍 [DEBUG] Panel returned with response: \(response.rawValue)")
         
         // Process response
-        if response == .OK {
-            print("🔍 [DEBUG] Response is .OK")
-            if let url = panel.url {
-                print("✅ [DEBUG] URL selected: \(url)")
-                print("✅ [DEBUG] URL path: \(url.path)")
-                print("✅ [DEBUG] URL exists: \(FileManager.default.fileExists(atPath: url.path))")
-                
-                var isDirectory: ObjCBool = false
-                if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory) {
-                    print("✅ [DEBUG] Is directory: \(isDirectory.boolValue)")
-                }
-                
-                self.projectRoot = url.path
-                print("📂 Project root selected: \(url.lastPathComponent)")
-                print("📁 Full path: \(url.path)")
-            } else {
-                print("❌ [DEBUG] Response was .OK but URL is nil!")
-            }
-        } else if response == .cancel {
-            print("🔍 [DEBUG] User cancelled selection")
+        if response == .OK, let url = panel.url {
+            self.projectRoot = url.path
+            print("📂 Project root selected: \(url.lastPathComponent)")
         } else {
-            print("⚠️ [DEBUG] Unexpected response: \(response.rawValue)")
+            print("📂 Project selection cancelled")
         }
-        
-        print("🔍 [DEBUG] selectProjectRoot completed")
     }
 
     // MARK: - Core Flow

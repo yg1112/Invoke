@@ -26,10 +26,7 @@ struct ContentView: View {
                         .shadow(color: logic.isListening ? activeGreen.opacity(0.6) : .clear, radius: 4)
                     
                     // Project Path (Clickable Text)
-                    Button(action: {
-                        print("🔍 [UI] Project selection button clicked")
-                        logic.selectProjectRoot()
-                    }) {
+                    Button(action: logic.selectProjectRoot) {
                         HStack(spacing: 4) {
                             Image(systemName: "folder")
                                 .font(.system(size: 10, weight: .bold))
