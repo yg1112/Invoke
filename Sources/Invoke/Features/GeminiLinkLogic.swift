@@ -131,8 +131,11 @@ class GeminiLinkLogic: ObservableObject {
         
         guard let content = pasteboard.string(forType: .string) else { return }
         
-        // 🎯 新格式：__FILE_START__ / __FILE_END__ 标记 (Copy Response 流)
-        if content.contains("__FILE_START__") && content.contains("__FILE_END__") {
+        // 🎯 新格式：<<<FILE>>> / <<<END>>> 或 __FILE_START__ / __FILE_END__ 或 **FILE_START** / **FILE_END**
+        // 注意：Gemini 可能把 __ 转换为 ** (Markdown 粗体)
+        if (content.contains("<<<FILE>>>") && content.contains("<<<END>>>")) ||
+           (content.contains("__FILE_START__") && content.contains("__FILE_END__")) ||
+           (content.contains("**FILE_START**") && content.contains("**FILE_END**")) {
             print("🔍 Detected Bulk Code Export format!")
             print("📋 Content length: \(content.count) chars")
             
@@ -291,9 +294,12 @@ class GeminiLinkLogic: ObservableObject {
             self.processingStatus = "Parsing file markers..."
         }
         
-        // 匹配格式: __FILE_START__ path/to/file.swift\n<content>\n__FILE_END__
+        // 匹配多种格式:
+        // 1. <<<FILE>>> path\n<content>\n<<<END>>> (新格式，不会被 Markdown 转义)
+        // 2. __FILE_START__ path\n<content>\n__FILE_END__ (原始格式)
+        // 3. **FILE_START** path\n<content>\n**FILE_END** (Gemini Markdown 转义后)
         let pattern = try! NSRegularExpression(
-            pattern: "__FILE_START__\\s+(.+?)\\n([\\s\\S]*?)__FILE_END__",
+            pattern: "(?:<<<FILE>>>|__FILE_START__|\\*\\*FILE_START\\*\\*)\\s+(.+?)\\n([\\s\\S]*?)(?:<<<END>>>|__FILE_END__|\\*\\*FILE_END\\*\\*)",
             options: []
         )
         let matches = pattern.matches(in: rawText, options: [], range: NSRange(rawText.startIndex..<rawText.endIndex, in: rawText))
@@ -608,8 +614,10 @@ class GeminiLinkLogic: ObservableObject {
             return
         }
         
-        // 🎯 优先检测新格式：__FILE_START__ / __FILE_END__
-        if content.contains("__FILE_START__") && content.contains("__FILE_END__") {
+        // 🎯 优先检测新格式：<<<FILE>>> / <<<END>>> 或 __FILE_START__ / __FILE_END__ 或 **FILE_START** / **FILE_END**
+        if (content.contains("<<<FILE>>>") && content.contains("<<<END>>>")) ||
+           (content.contains("__FILE_START__") && content.contains("__FILE_END__")) ||
+           (content.contains("**FILE_START**") && content.contains("**FILE_END**")) {
             print("🔍 Found Bulk Code Export format!")
             print("📋 Content length: \(content.count) chars")
             
@@ -672,6 +680,7 @@ class GeminiLinkLogic: ObservableObject {
         print("📖 Copying Gemini Personal Context instruction...")
         
         // 新格式：利用 "Copy Response" 按钮 + 明确的文件分隔符
+        // 使用 <<<FILE>>> 和 <<<END>>> 避免 Markdown 转义问题
         let instruction = """
         [System Instruction: Bulk Code Export Protocol]
 
@@ -680,36 +689,35 @@ class GeminiLinkLogic: ObservableObject {
         Strategy:
         1. Mode: FULL OVERWRITE. Always output the COMPLETE content of the file(s).
         2. Format: Output a raw stream designed for "Copy Response" & local parsing.
-        3. Delimiters (CRITICAL):
-           - Use strict separators so the user's local script can split files.
-           - Format:
-             
-             __FILE_START__ <relative_path>
-             <code content>
-             __FILE_END__
-             
-           - Leave 1 empty line between files.
+        3. Delimiters (CRITICAL - use EXACTLY as shown, including the angle brackets):
+           
+           <<<FILE>>> <relative_path>
+           <code content>
+           <<<END>>>
+           
+           Leave 1 empty line between files.
 
         Example Output:
         (User: "Create view and model @code")
 
-        __FILE_START__ Sources/Models/User.swift
+        <<<FILE>>> Sources/Models/User.swift
         struct User {
             let id: UUID
         }
-        __FILE_END__
+        <<<END>>>
 
-        __FILE_START__ Sources/Views/UserView.swift
+        <<<FILE>>> Sources/Views/UserView.swift
         import SwiftUI
         struct UserView: View {
-            var body: some View { ... }
+            var body: some View { Text("Hello") }
         }
-        __FILE_END__
+        <<<END>>>
 
         Rules:
         - NO conversational text (keep it clean).
-        - NO Markdown code blocks (```) needed, just raw text between markers.
+        - NO Markdown code blocks needed, just raw text between markers.
         - Always include relative path from project root.
+        - The markers <<<FILE>>> and <<<END>>> must appear EXACTLY as written.
         """
         
         pasteboard.clearContents()

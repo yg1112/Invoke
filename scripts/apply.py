@@ -27,16 +27,24 @@ except ImportError:
 def save_files_from_response(text):
     """从 Gemini 回复中解析文件并写入磁盘"""
     
-    # 正则表达式匹配我们定义的标记
-    # 匹配 __FILE_START__ (路径) ...内容... __FILE_END__
+    # 正则表达式匹配多种标记格式:
+    # 1. <<<FILE>>> path ... <<<END>>> (新格式，不会被 Markdown 转义)
+    # 2. __FILE_START__ path ... __FILE_END__ (原始格式)
+    # 3. **FILE_START** path ... **FILE_END** (Gemini Markdown 转义后)
     # re.DOTALL 让 . 可以匹配换行符
-    pattern = re.compile(r'__FILE_START__\s+(.*?)\n(.*?)__FILE_END__', re.DOTALL)
+    pattern = re.compile(
+        r'(?:<<<FILE>>>|__FILE_START__|\*\*FILE_START\*\*)\s+(.*?)\n(.*?)(?:<<<END>>>|__FILE_END__|\*\*FILE_END\*\*)',
+        re.DOTALL
+    )
     
     matches = pattern.findall(text)
     
     if not matches:
         print("⚠️  未检测到文件标记。")
-        print("请确认 Gemini 回复中包含 '__FILE_START__' 和 '__FILE_END__'。")
+        print("请确认 Gemini 回复中包含以下标记之一:")
+        print("  - <<<FILE>>> ... <<<END>>>")
+        print("  - __FILE_START__ ... __FILE_END__")
+        print("  - **FILE_START** ... **FILE_END**")
         print("\n📋 剪贴板内容预览:")
         print(text[:500] if len(text) > 500 else text)
         return False
