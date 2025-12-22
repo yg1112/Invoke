@@ -2,41 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleDevelopmentRegion</key>
-    <string>en</string>
-    <key>CFBundleExecutable</key>
-    <string>Invoke</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
-    <key>CFBundleIdentifier</key>
-    <string>com.yukungao.invoke</string>
-    <key>CFBundleInfoDictionaryVersion</key>
-    <string>6.0</string>
-    <key>CFBundleName</key>
-    <string>Invoke</string>
-    <key>CFBundlePackageType</key>
-    <string>APPL</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
-    <key>LSUIElement</key>
-    <true/>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Invoke may need microphone access for certain features.</string>
-    <key>NSAppleEventsUsageDescription</key>
-    <string>Invoke needs permission to interact with other applications.</string>
-    <key>NSDocumentsFolderUsageDescription</key>
-    <string>Invoke needs access to your documents to select and manage project folders.</string>
-    <key>NSDesktopFolderUsageDescription</key>
-    <string>Invoke needs access to your desktop to select and manage project folders.</string>
-    <key>SUFeedURL</key>
-    <string>https://yg1112.github.io/invoke/appcast.xml</string>
-    <key>SUPublicEDKey</key>
-    <string>zYS3WUrHKwxT3QrmcjsIWouBDvuG5xpLzN7ZZ1FS7o8=</string>
-    <key>SUEnableAutomaticChecks</key>
-    <true/>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIconname</key>
+	<string>AppIcon</string>
+	<key>LSUIFlent</key>
+	<true/>
 </dict>
 </plist>
