@@ -25,14 +25,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func setupMenuBarIcon() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "hand.rays.fill", accessibilityDescription: "Invoke")
+            // 🐦 品牌重塑：图标改为小鸟
+            button.image = NSImage(systemSymbolName: "bird.fill", accessibilityDescription: "Fetch")
             button.action = #selector(togglePanel)
             button.target = self
         }
     }
     
     private func setupFloatingPanel() {
-        // 1. 默认尺寸
         let defaultW: CGFloat = 480
         let defaultH: CGFloat = 320
         
@@ -57,19 +57,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         
         if let panel = floatingPanel {
             panel.delegate = self
-            
-            // 🔥 核心修改：默认使用 .floating 层级
-            // 这确保了 App 启动时会在浏览器/Xcode 之上，不会被挡住
             panel.level = .floating 
-            
             panel.titlebarAppearsTransparent = true
             panel.titleVisibility = .hidden
             panel.isMovableByWindowBackground = true
-            
             panel.standardWindowButton(.closeButton)?.isHidden = true
             panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
             panel.standardWindowButton(.zoomButton)?.isHidden = true
-            
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             panel.backgroundColor = .clear
             panel.isOpaque = false

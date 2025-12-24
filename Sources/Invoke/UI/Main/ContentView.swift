@@ -6,7 +6,7 @@ struct ContentView: View {
     @State private var isAlwaysOnTop = true
     @State private var hasPermission = AXIsProcessTrusted()
     
-    // 🎨 Fetch Palette (保持一致)
+    // 🎨 Fetch Palette
     let darkBg = Color(red: 0.05, green: 0.05, blue: 0.07)
     let neonGreen = Color(red: 0.0, green: 0.9, blue: 0.5)
     let neonBlue = Color(red: 0.0, green: 0.5, blue: 1.0)
@@ -14,7 +14,7 @@ struct ContentView: View {
     let dangerRed = Color(red: 1.0, green: 0.3, blue: 0.4)
     
     let smartFont = Font.system(size: 14, weight: .light, design: .monospaced)
-    let permissionTimer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+    let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
     
     var body: some View {
         ZStack {
@@ -50,7 +50,7 @@ struct ContentView: View {
                                     if logic.gitMode == mode { Image(systemName: "checkmark") }
                                     Text(mode.title)
                                     Image(systemName: mode.icon)
-                                    // 菜单里的解释文本
+                                    // 菜单里的解释文本，让用户秒懂
                                     Text("- " + mode.description).font(.caption)
                                 }
                             }
@@ -73,7 +73,7 @@ struct ContentView: View {
                     }
                     .menuStyle(.borderlessButton)
                     .focusable(false)
-                    .help(logic.gitMode.description) // 鼠标悬停也显示解释
+                    .help(logic.gitMode.description)
                     
                     // 4. Pin & Close
                     WindowControls(isAlwaysOnTop: $isAlwaysOnTop, toggleAction: toggleAlwaysOnTop)
@@ -196,7 +196,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - Subcomponents (Extracted for cleanliness)
+// MARK: - Subcomponents (Keep code clean)
 
 struct StatusIndicator: View {
     let status: ContentView.AppStatus
@@ -276,9 +276,6 @@ struct ProcessingBanner: View {
     }
 }
 
-// TransactionCard, GhostActionButton, ScaleButtonStyle, EmptyStateView need to be here.
-// I will include them to ensure the file is complete and compilable.
-
 struct TransactionCard: View {
     let log: ChangeLog
     @ObservedObject var logic: GeminiLinkLogic
@@ -355,13 +352,13 @@ struct EmptyStateView: View {
         VStack(spacing: 18) {
             Button(action: { if status == .error { onFixAction() } }) { birdIcon }.buttonStyle(.plain).focusable(false)
                 .onHover { inside in if inside && status == .error { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
-                .onTapGesture { if status == .error { onFixAction() } } // Backup tap
             VStack(spacing: 6) {
                 Text(statusText).font(smartFont).foregroundColor(statusTextColor).tracking(4)
                 Text(subStatusText).font(.system(size: 10, weight: .medium)).foregroundColor(.gray.opacity(0.6))
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
         .contentShape(Rectangle())
+        .onTapGesture { if status == .error { onFixAction() } }
     }
     
     var birdIcon: some View {
