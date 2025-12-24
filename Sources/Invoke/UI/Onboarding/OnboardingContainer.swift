@@ -418,16 +418,29 @@ struct OnboardingContainer: View {
             VStack(spacing: 16) {
                 // Icons connection animation
                 HStack(spacing: 16) {
-                    Image(systemName: "sparkles")
-                        .font(.system(size: 36))
-                        .foregroundStyle(
-                            LinearGradient(
-                                colors: [.purple, .blue],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
+                    if #available(macOS 15.0, *) {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 36))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.purple, .blue],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
                             )
-                        )
-                        .symbolEffect(.bounce, options: .nonRepeating)
+                            .symbolEffect(.bounce, options: .nonRepeating)
+                    } else {
+                        // Fallback for macOS 14
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 36))
+                            .foregroundStyle(
+                                LinearGradient(
+                                    colors: [.purple, .blue],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                    }
                     
                     Image(systemName: "arrow.right")
                         .font(.system(size: 18, weight: .semibold))

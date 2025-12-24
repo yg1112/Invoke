@@ -1,30 +1,23 @@
 import SwiftUI
 import AppKit
-import Combine
 
-class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate { // 遵循 NSWindowDelegate
+class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusItem: NSStatusItem?
     var floatingPanel: FloatingPanel?
-    var settingsWindow: NSWindow?
     var onboardingWindow: NSWindow?
     
-    // 用 UserDefaults 存储窗口坐标
+    // 保存窗口状态的 Keys
     let posKeyX = "WindowPosX"
     let posKeyY = "WindowPosY"
+    let widthKey = "WindowWidth"
+    let heightKey = "WindowHeight"
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        print("✅ [APP] Launching Invoke")
-        
-        // 1. 设置菜单栏
         setupMenuBarIcon()
         
-        // 2. 检查是否需要显示 onboarding
-        let hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
-        if !hasCompletedOnboarding {
-            print("🎬 [APP] First run - showing onboarding")
+        if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
             showOnboarding()
         } else {
-            print("✅ [APP] Onboarding completed - showing main panel")
             setupFloatingPanel()
         }
     }
@@ -39,50 +32,65 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate { // 遵循
     }
     
     private func setupFloatingPanel() {
-        // 定义窗口大小
-        let width: CGFloat = 280
-        let height: CGFloat = 140 // 稍微加高一点以容纳更多信息
+        // 1. 尺寸恢复：默认更宽，更像一个 Dashboard
+        let defaultW: CGFloat = 480
+        let defaultH: CGFloat = 320
         
-        // 1. 读取上次保存的位置，如果没有则默认在屏幕左下角稍微往上一点
+        let w = UserDefaults.standard.double(forKey: widthKey)
+        let h = UserDefaults.standard.double(forKey: heightKey)
+        let finalW = w > 0 ? CGFloat(w) : defaultW
+        let finalH = h > 0 ? CGFloat(h) : defaultH
+        
         let savedX = UserDefaults.standard.double(forKey: posKeyX)
         let savedY = UserDefaults.standard.double(forKey: posKeyY)
+        let x = savedX != 0 ? CGFloat(savedX) : 100
+        let y = savedY != 0 ? CGFloat(savedY) : 100
         
-        // 默认位置：屏幕左下角 (padding 50)
-        let defaultX: CGFloat = 50
-        let defaultY: CGFloat = 50
+        let contentRect = NSRect(x: x, y: y, width: finalW, height: finalH)
         
-        let initialX = savedX != 0 ? CGFloat(savedX) : defaultX
-        let initialY = savedY != 0 ? CGFloat(savedY) : defaultY
-        
-        let contentRect = NSRect(x: initialX, y: initialY, width: width, height: height)
-        
-        // 2. 创建面板
+        // 2. 关键修复：使用 .titled + .fullSizeContentView 来获得 Resize 能力，同时保持无边框外观
+        // 注意：移除了 .hudWindow，因为它限制太多，我们自己画背景
         floatingPanel = FloatingPanel(
             contentRect: contentRect,
-            styleMask: [.borderless, .nonactivatingPanel, .hudWindow], // HUD 风格更优雅
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
         
         if let panel = floatingPanel {
-            panel.delegate = self // 监听移动事件
-            panel.level = .normal  // 默认不置顶，用户点图钉才置顶
+            panel.delegate = self
+            panel.level = .normal
+            
+            // 3. 视觉魔法：隐藏标题栏，但保留 Frame 的功能
+            panel.titlebarAppearsTransparent = true
+            panel.titleVisibility = .hidden
+            panel.isMovableByWindowBackground = true
+            
+            // 隐藏红绿灯按钮，保持极简
+            panel.standardWindowButton(.closeButton)?.isHidden = true
+            panel.standardWindowButton(.miniaturizeButton)?.isHidden = true
+            panel.standardWindowButton(.zoomButton)?.isHidden = true
+            
+            // 允许跨空间显示
             panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-            panel.backgroundColor = .clear // 完全透明，交给 SwiftUI 渲染背景
+            
+            // 背景完全透明，由 SwiftUI 接管
+            panel.backgroundColor = .clear
             panel.isOpaque = false
             panel.hasShadow = true
-            panel.isMovableByWindowBackground = true // 关键：允许通过背景拖拽！
             
-            // 注入 AppUI
+            panel.minSize = NSSize(width: 380, height: 200)
+            
+            // 注入 UI
             let appUI = AppUI(
-                onSettings: { [weak self] in self?.showSettings() },
+                onSettings: {},
                 onQuit: { NSApplication.shared.terminate(nil) }
             )
             
-            // 使用 HostingView
             let hostingView = NSHostingView(rootView: appUI)
-            hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
-            hostingView.wantsLayer = true
+            hostingView.autoresizingMask = [.width, .height]
+            hostingView.frame = NSRect(x: 0, y: 0, width: finalW, height: finalH)
+            // 这一步很重要：让 SwiftUI 背景透明
             hostingView.layer?.backgroundColor = NSColor.clear.cgColor
             
             panel.contentView = hostingView
@@ -90,56 +98,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate { // 遵循
         }
     }
     
-    // 3. 监听窗口移动，实时保存位置
-    func windowDidMove(_ notification: Notification) {
-        if let panel = floatingPanel {
-            UserDefaults.standard.set(Double(panel.frame.origin.x), forKey: posKeyX)
-            UserDefaults.standard.set(Double(panel.frame.origin.y), forKey: posKeyY)
-        }
+    // 监听状态保存
+    func windowDidMove(_ notification: Notification) { saveWindowFrame() }
+    func windowDidResize(_ notification: Notification) { saveWindowFrame() }
+    
+    private func saveWindowFrame() {
+        guard let panel = floatingPanel else { return }
+        UserDefaults.standard.set(Double(panel.frame.origin.x), forKey: posKeyX)
+        UserDefaults.standard.set(Double(panel.frame.origin.y), forKey: posKeyY)
+        UserDefaults.standard.set(Double(panel.frame.size.width), forKey: widthKey)
+        UserDefaults.standard.set(Double(panel.frame.size.height), forKey: heightKey)
     }
     
     @objc private func togglePanel() {
         guard let panel = floatingPanel else { return }
-        if panel.isVisible {
-            panel.orderOut(nil)
-        } else {
-            panel.orderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
-        }
-    }
-    
-    @objc func showSettings() {
-        // (Settings Window Logic - 保持不变)
+        if panel.isVisible { panel.orderOut(nil) } else { panel.orderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     }
     
     private func showOnboarding() {
-        let onboardingView = OnboardingContainer()
-            .environment(\.closeOnboarding, { [weak self] in
-                print("✅ [APP] Onboarding completed")
-                self?.onboardingWindow?.close()
-                self?.onboardingWindow = nil
-                self?.setupFloatingPanel()
-            })
-        
-        onboardingWindow = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 520),
-            styleMask: [.titled, .closable, .fullSizeContentView],
-            backing: .buffered,
-            defer: false
-        )
-        
+        let onboardingView = OnboardingContainer().environment(\.closeOnboarding, { [weak self] in
+            self?.onboardingWindow?.close()
+            self?.onboardingWindow = nil
+            self?.setupFloatingPanel()
+        })
+        onboardingWindow = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 600, height: 520), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         onboardingWindow?.center()
-        onboardingWindow?.isReleasedWhenClosed = false
         onboardingWindow?.titlebarAppearsTransparent = true
-        onboardingWindow?.titleVisibility = .hidden
         onboardingWindow?.contentView = NSHostingView(rootView: onboardingView)
         onboardingWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 }
-
-// 保持 FloatingPanel 类不变，或者确保它允许交互
-// ... (FloatingPanel class code below) ...
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
