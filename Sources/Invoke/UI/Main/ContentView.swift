@@ -34,15 +34,11 @@ struct ContentView: View {
                 
                 // === HUD HEADER ===
                 HStack(spacing: 12) {
-                    // 1. 状态灯
                     StatusIndicator(status: currentStatus, color: statusColor)
-                    
-                    // 2. 项目选择器
                     ProjectSelector(logic: logic, color: neonOrange)
-                    
                     Spacer()
                     
-                    // 3. Mode Selector
+                    // Mode Selector
                     Menu {
                         ForEach(GeminiLinkLogic.GitMode.allCases, id: \.self) { mode in
                             Button(action: { logic.gitMode = mode }) {
@@ -56,25 +52,17 @@ struct ContentView: View {
                         }
                     } label: {
                         HStack(spacing: 4) {
-                            Image(systemName: logic.gitMode.icon)
-                                .font(.system(size: 10))
-                            Text(logic.gitMode.title.uppercased())
-                                .font(.system(size: 10, weight: .bold))
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 8))
-                                .opacity(0.5)
+                            Image(systemName: logic.gitMode.icon).font(.system(size: 10))
+                            Text(logic.gitMode.title.uppercased()).font(.system(size: 10, weight: .bold))
+                            Image(systemName: "chevron.up.chevron.down").font(.system(size: 8)).opacity(0.5)
                         }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Color.white.opacity(0.08))
-                        .cornerRadius(6)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(Color.white.opacity(0.08)).cornerRadius(6)
                         .foregroundColor(.white.opacity(0.8))
                     }
-                    .menuStyle(.borderlessButton)
-                    .focusable(false)
+                    .menuStyle(.borderlessButton).focusable(false)
                     .help(logic.gitMode.description)
                     
-                    // 4. Pin & Close
                     WindowControls(isAlwaysOnTop: $isAlwaysOnTop, toggleAction: toggleAlwaysOnTop)
                 }
                 .padding(16)
@@ -115,33 +103,21 @@ struct ContentView: View {
                 // === FOOTER ===
                 HStack(spacing: 16) {
                     Menu {
-                        // 🔥 菜单优化：改名，删鸡肋
                         Button("📋 Copy System Prompt") { logic.copyGemSetupGuide() }
                         Button("🔒 Check Permissions") { openAccessibilitySettings() }
                     } label: {
-                        HStack {
-                            Image(systemName: "sparkles")
-                            Text("PAIR")
-                        }
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundColor(neonBlue)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(neonBlue.opacity(0.1))
-                        .cornerRadius(8)
+                        HStack { Image(systemName: "sparkles"); Text("PAIR") }
+                            .font(.system(size: 12, weight: .bold)).foregroundColor(neonBlue)
+                            .padding(.horizontal, 12).padding(.vertical, 8)
+                            .background(neonBlue.opacity(0.1)).cornerRadius(8)
                     }
-                    .menuStyle(.borderlessButton)
-                    .focusable(false)
+                    .menuStyle(.borderlessButton).focusable(false)
                     
                     Spacer()
                     
                     HStack(spacing: 8) {
-                        GhostActionButton(title: "Apply", icon: "arrow.down", activeColor: neonGreen) {
-                            logic.manualApplyFromClipboard()
-                        }
-                        GhostActionButton(title: "Review", icon: "eye", activeColor: neonOrange) {
-                            logic.reviewLastChange()
-                        }
+                        GhostActionButton(title: "Apply", icon: "arrow.down", activeColor: neonGreen) { logic.manualApplyFromClipboard() }
+                        GhostActionButton(title: "Review", icon: "eye", activeColor: neonOrange) { logic.reviewLastChange() }
                     }
                 }
                 .padding(16)
@@ -158,7 +134,6 @@ struct ContentView: View {
         .onReceive(permissionTimer) { _ in hasPermission = AXIsProcessTrusted() }
     }
     
-    // Status Logic
     enum AppStatus { case error, warning, processing, ready }
     var currentStatus: AppStatus {
         if !hasPermission { return .error }
@@ -211,8 +186,7 @@ struct ProjectSelector: View {
         Button(action: logic.selectProjectRoot) {
             HStack(spacing: 6) {
                 Image(systemName: logic.projectRoot.isEmpty ? "folder.badge.plus" : "folder.fill")
-                    .font(.system(size: 10))
-                    .foregroundColor(logic.projectRoot.isEmpty ? color : .white)
+                    .font(.system(size: 10)).foregroundColor(logic.projectRoot.isEmpty ? color : .white)
                 Text(logic.projectRoot.isEmpty ? "SELECT TARGET" : URL(fileURLWithPath: logic.projectRoot).lastPathComponent.uppercased())
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .foregroundColor(logic.projectRoot.isEmpty ? color : .white)
@@ -258,34 +232,18 @@ struct ProcessingBanner: View {
     }
 }
 
+// ♻️ REFACTORED: Split into smaller parts for faster compilation
 struct TransactionCard: View {
     let log: ChangeLog
     @ObservedObject var logic: GeminiLinkLogic
     @State private var isHovering = false
+    
     var body: some View {
         HStack(spacing: 12) {
-            ZStack {
-                Circle().fill(Color.white.opacity(0.05)).frame(width: 32, height: 32)
-                Image(systemName: "arrow.up.right").font(.system(size: 12, weight: .bold)).foregroundColor(.white.opacity(0.7))
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(log.summary).font(.system(size: 13, weight: .medium)).foregroundColor(.white).lineLimit(1)
-                HStack(spacing: 6) {
-                    Text(log.commitHash).font(.system(size: 10, design: .monospaced)).foregroundColor(.gray).padding(.horizontal, 4).background(Color.white.opacity(0.05)).cornerRadius(4)
-                    Text(timeAgo(log.timestamp)).font(.system(size: 10)).foregroundColor(.gray.opacity(0.7))
-                }
-            }
+            iconView
+            contentView
             Spacer()
-            if isHovering {
-                HStack(spacing: 4) {
-                    Button(action: openCommit) {
-                        Image(systemName: "safari").foregroundColor(.blue).frame(width: 28, height: 28).background(Color.blue.opacity(0.1)).clipShape(Circle())
-                    }.buttonStyle(ScaleButtonStyle()).focusable(false)
-                    Button(action: { logic.closePR(for: log) }) {
-                        Image(systemName: "xmark").foregroundColor(.red).frame(width: 28, height: 28).background(Color.red.opacity(0.1)).clipShape(Circle())
-                    }.buttonStyle(ScaleButtonStyle()).focusable(false)
-                }.transition(.scale.combined(with: .opacity))
-            }
+            actionsView
         }
         .padding(10)
         .background(isHovering ? Color.white.opacity(0.08) : Color.white.opacity(0.03))
@@ -293,6 +251,38 @@ struct TransactionCard: View {
         .overlay(RoundedRectangle(cornerRadius: 12).stroke(isHovering ? Color.white.opacity(0.1) : Color.clear, lineWidth: 1))
         .onHover { hover in withAnimation(.easeInOut(duration: 0.2)) { isHovering = hover } }
     }
+    
+    private var iconView: some View {
+        ZStack {
+            Circle().fill(Color.white.opacity(0.05)).frame(width: 32, height: 32)
+            Image(systemName: "arrow.up.right").font(.system(size: 12, weight: .bold)).foregroundColor(.white.opacity(0.7))
+        }
+    }
+    
+    private var contentView: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(log.summary).font(.system(size: 13, weight: .medium)).foregroundColor(.white).lineLimit(1)
+            HStack(spacing: 6) {
+                Text(log.commitHash).font(.system(size: 10, design: .monospaced)).foregroundColor(.gray).padding(.horizontal, 4).background(Color.white.opacity(0.05)).cornerRadius(4)
+                Text(timeAgo(log.timestamp)).font(.system(size: 10)).foregroundColor(.gray.opacity(0.7))
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private var actionsView: some View {
+        if isHovering {
+            HStack(spacing: 4) {
+                Button(action: openCommit) {
+                    Image(systemName: "safari").foregroundColor(.blue).frame(width: 28, height: 28).background(Color.blue.opacity(0.1)).clipShape(Circle())
+                }.buttonStyle(ScaleButtonStyle()).focusable(false)
+                Button(action: { logic.closePR(for: log) }) {
+                    Image(systemName: "xmark").foregroundColor(.red).frame(width: 28, height: 28).background(Color.red.opacity(0.1)).clipShape(Circle())
+                }.buttonStyle(ScaleButtonStyle()).focusable(false)
+            }.transition(.scale.combined(with: .opacity))
+        }
+    }
+    
     private func openCommit() {
         if let str = GitService.shared.getCommitURL(for: log.commitHash, in: logic.projectRoot), let url = URL(string: str) { NSWorkspace.shared.open(url) }
     }
@@ -328,6 +318,7 @@ struct EmptyStateView: View {
     let status: ContentView.AppStatus
     let neonColor: Color; let orangeColor: Color; let dangerColor: Color
     let smartFont: Font; let onFixAction: () -> Void
+    
     var body: some View {
         VStack(spacing: 18) {
             Button(action: { if status == .error { onFixAction() } }) { birdIcon }.buttonStyle(.plain).focusable(false)
@@ -340,6 +331,7 @@ struct EmptyStateView: View {
         }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
         .onTapGesture { if status == .error { onFixAction() } }
     }
+    
     var birdIcon: some View {
         Group {
             if #available(macOS 15.0, *) {
@@ -347,12 +339,13 @@ struct EmptyStateView: View {
                     .symbolEffect(.wiggle, options: .repeating, isActive: status == .ready)
                     .symbolEffect(.pulse, options: .repeating, isActive: status == .error)
             } else {
+                // Fallback for macOS 14: Use Pulse only to avoid warning
                 Image(systemName: "bird.fill").font(.system(size: 48)).foregroundColor(statusTextColor)
-                    .symbolEffect(.bounce, options: .repeating, isActive: status == .ready)
-                    .symbolEffect(.pulse, options: .repeating, isActive: status == .error)
+                    .symbolEffect(.pulse, isActive: status == .ready || status == .error)
             }
         }
     }
+    
     var statusText: String {
         switch status {
         case .ready: return "AWAITING SEEDS"
