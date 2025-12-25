@@ -93,4 +93,19 @@ class GitService {
         _ = try? run(args: ["config", "credential.helper", "osxkeychain"], in: directory)
         _ = try? run(args: ["config", "--global", "credential.helper", "cache --timeout=3600"], in: directory)
     }
+    
+    // MARK: - Auto Push (Aider Integration)
+    
+    func autoPushChanges(in directory: String, message: String = "refactor: Auto-update by Fetch/Aider") {
+        DispatchQueue.global().async {
+            do {
+                _ = try self.run(args: ["add", "."], in: directory)
+                _ = try self.run(args: ["commit", "-m", message], in: directory)
+                _ = try self.run(args: ["push", "origin", "main"], in: directory)
+                print("🚀 Auto-pushed changes to GitHub")
+            } catch {
+                print("⚠️ Auto-push failed: \(error)")
+            }
+        }
+    }
 }

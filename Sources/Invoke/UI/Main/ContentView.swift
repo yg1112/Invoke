@@ -2,374 +2,314 @@ import SwiftUI
 import ApplicationServices
 
 struct ContentView: View {
-@StateObject var logic = GeminiLinkLogic()
-@State private var isAlwaysOnTop = true
-@State private var hasPermission = AXIsProcessTrusted()
+    @StateObject private var bridgeService = BridgeService.shared
+    @StateObject private var aiderService = AiderService.shared
+    @State private var inputText = ""
+    @State private var projectPath = UserDefaults.standard.string(forKey: "ProjectRoot") ?? ""
+    @State private var isAlwaysOnTop = true
+    
+    // 🎨 Fetch Palette
+    let darkBg = Color(red: 0.05, green: 0.05, blue: 0.07)
+    let neonGreen = Color(red: 0.0, green: 0.9, blue: 0.5)
+    let neonBlue = Color(red: 0.0, green: 0.5, blue: 1.0)
+    let neonOrange = Color(red: 1.0, green: 0.6, blue: 0.0)
+    let dangerRed = Color(red: 1.0, green: 0.3, blue: 0.4)
 
-// 🎨 Fetch Palette
-let darkBg = Color(red: 0.05, green: 0.05, blue: 0.07)
-let neonGreen = Color(red: 0.0, green: 0.9, blue: 0.5)
-let neonBlue = Color(red: 0.0, green: 0.5, blue: 1.0)
-let neonOrange = Color(red: 1.0, green: 0.6, blue: 0.0)
-let dangerRed = Color(red: 1.0, green: 0.3, blue: 0.4)
-
-let smartFont = Font.system(size: 14, weight: .light, design: .monospaced)
-let permissionTimer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
-
-var body: some View {
-    ZStack {
-        darkBg.opacity(0.95).edgesIgnoringSafeArea(.all)
-        
-        RoundedRectangle(cornerRadius: 16)
-            .strokeBorder(
-                LinearGradient(
-                    colors: [Color.white.opacity(0.1), Color.white.opacity(0.02)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 1
-            )
-        
-        VStack(spacing: 0) {
+    var body: some View {
+        ZStack {
+            darkBg.opacity(0.95).edgesIgnoringSafeArea(.all)
             
-            // === HUD HEADER ===
-            HStack(spacing: 12) {
-                StatusIndicator(status: currentStatus, color: statusColor)
-                ProjectSelector(logic: logic, color: neonOrange)
-                Spacer()
+            RoundedRectangle(cornerRadius: 16)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.1), Color.white.opacity(0.02)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+            
+            VStack(spacing: 0) {
+                // === HUD HEADER ===
+                headerView
                 
-                // Mode Selector
-                Menu {
-                    ForEach(GeminiLinkLogic.GitMode.allCases, id: \.self) { mode in
-                        Button(action: { logic.gitMode = mode }) {
-                            HStack {
-                                if logic.gitMode == mode { Image(systemName: "checkmark") }
-                                Text(mode.title)
-                                Image(systemName: mode.icon)
-                                Text("- " + mode.description).font(.caption)
-                            }
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: logic.gitMode.icon).font(.system(size: 10))
-                        Text(logic.gitMode.title.uppercased()).font(.system(size: 10, weight: .bold))
-                        Image(systemName: "chevron.up.chevron.down").font(.system(size: 8)).opacity(0.5)
-                    }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Color.white.opacity(0.08)).cornerRadius(6)
-                    .foregroundColor(.white.opacity(0.8))
-                }
-                .menuStyle(.borderlessButton).focusable(false)
-                .help(logic.gitMode.description)
-                
-                WindowControls(isAlwaysOnTop: $isAlwaysOnTop, toggleAction: toggleAlwaysOnTop)
-            }
-            .padding(16)
-            
-            // === PROCESSING BANNER ===
-            if logic.isProcessing {
-                ProcessingBanner(status: logic.processingStatus, color: neonOrange)
-            }
-            
-            // === CONTENT ===
-            Group {
-                if !hasPermission {
-                    EmptyStateView(
-                        status: .error,
-                        neonColor: neonGreen, orangeColor: neonOrange, dangerColor: dangerRed,
-                        smartFont: smartFont, onFixAction: openAccessibilitySettings
-                    )
-                } else if logic.changeLogs.isEmpty {
-                    EmptyStateView(
-                        status: currentStatus,
-                        neonColor: neonGreen, orangeColor: neonOrange, dangerColor: dangerRed,
-                        smartFont: smartFont, onFixAction: openAccessibilitySettings
-                    )
+                // === CONTENT ===
+                if projectPath.isEmpty {
+                    projectSetupView
                 } else {
-                    ScrollView {
-                        // 🟢 FIX 1: LazyVStack -> VStack to prevent layout jumping and gaps
-                        VStack(spacing: 8) {
-                            ForEach(logic.changeLogs) { log in
-                                TransactionCard(log: log, logic: logic)
-                                    .transition(.scale.combined(with: .opacity))
-                            }
-                        }
-                        .padding(16)
-                        .frame(maxWidth: .infinity) // Ensure full width
+                    chatView
+                }
+                
+                // === INPUT AREA ===
+                if !projectPath.isEmpty {
+                    inputAreaView
+                }
+            }
+        }
+        .frame(minWidth: 480, maxWidth: .infinity, minHeight: 400, maxHeight: .infinity)
+        .cornerRadius(16)
+        .onAppear {
+            toggleAlwaysOnTop()
+            // App 启动时自动启动 Bridge
+            bridgeService.startBridge()
+            
+            // 如果已有 projectPath，启动 Aider
+            if !projectPath.isEmpty {
+                aiderService.startAider(projectPath: projectPath)
+            }
+        }
+    }
+    
+    // MARK: - Header
+    
+    private var headerView: some View {
+        HStack(spacing: 12) {
+            // 状态指示灯
+            Circle()
+                .fill(bridgeService.connectionStatus.contains("Connected") ? neonGreen : dangerRed)
+                .frame(width: 8, height: 8)
+                .shadow(color: bridgeService.connectionStatus.contains("Connected") ? neonGreen.opacity(0.8) : dangerRed.opacity(0.8), radius: 6)
+            
+            Text(bridgeService.connectionStatus)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(.gray)
+            
+            Spacer()
+            
+            // 项目选择器
+            Button(action: selectProject) {
+                HStack(spacing: 6) {
+                    Image(systemName: projectPath.isEmpty ? "folder.badge.plus" : "folder.fill")
+                        .font(.system(size: 10))
+                        .foregroundColor(projectPath.isEmpty ? neonOrange : .white)
+                    Text(projectPath.isEmpty ? "SELECT PROJECT" : URL(fileURLWithPath: projectPath).lastPathComponent.uppercased())
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(projectPath.isEmpty ? neonOrange : .white)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 140, alignment: .leading)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(projectPath.isEmpty ? neonOrange.opacity(0.1) : Color.white.opacity(0.05))
+                .cornerRadius(6)
+            }
+            .buttonStyle(ScaleButtonStyle())
+            .focusable(false)
+            
+            // 重启 Bridge 按钮
+            Button(action: { bridgeService.startBridge() }) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 12))
+                    .foregroundColor(.gray)
+            }
+            .buttonStyle(ScaleButtonStyle())
+            .focusable(false)
+            .help("Restart Bridge")
+            
+            // Pin 按钮
+            Button(action: toggleAlwaysOnTop) {
+                Image(systemName: isAlwaysOnTop ? "pin.fill" : "pin")
+                    .font(.system(size: 12))
+                    .foregroundColor(isAlwaysOnTop ? neonBlue : .gray)
+            }
+            .buttonStyle(ScaleButtonStyle())
+            .focusable(false)
+            
+            // 关闭按钮
+            Button(action: { NSApplication.shared.terminate(nil) }) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(.gray)
+            }
+            .buttonStyle(ScaleButtonStyle())
+            .focusable(false)
+        }
+        .padding(16)
+    }
+    
+    // MARK: - Project Setup View
+    
+    private var projectSetupView: some View {
+        VStack(spacing: 18) {
+            Image(systemName: "bird.fill")
+                .font(.system(size: 48))
+                .foregroundColor(neonOrange)
+                .symbolEffect(.pulse, options: .repeating)
+            
+            VStack(spacing: 6) {
+                Text("SELECT A PROJECT")
+                    .font(.system(size: 14, weight: .light, design: .monospaced))
+                    .foregroundColor(neonOrange)
+                    .tracking(4)
+                Text("Choose a directory to start AI pair programming")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(.gray.opacity(0.6))
+            }
+            
+            Button(action: selectProject) {
+                HStack(spacing: 8) {
+                    Image(systemName: "folder.badge.plus")
+                    Text("Select Project Folder")
+                }
+                .font(.system(size: 13, weight: .semibold))
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+                .background(neonOrange)
+                .foregroundColor(.black)
+                .cornerRadius(8)
+            }
+            .buttonStyle(ScaleButtonStyle())
+            .focusable(false)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+    
+    // MARK: - Chat View
+    
+    private var chatView: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(aiderService.messages) { msg in
+                        ChatBubble(message: msg, neonBlue: neonBlue)
+                            .id(msg.id)
+                    }
+                }
+                .padding(16)
+            }
+            .onChange(of: aiderService.messages.count) {
+                if let lastId = aiderService.messages.last?.id {
+                    withAnimation {
+                        proxy.scrollTo(lastId, anchor: .bottom)
                     }
                 }
             }
-            .frame(maxHeight: .infinity)
+        }
+    }
+    
+    // MARK: - Input Area
+    
+    private var inputAreaView: some View {
+        VStack(spacing: 8) {
+            if aiderService.isThinking {
+                HStack {
+                    ProgressView()
+                        .scaleEffect(0.5)
+                        .progressViewStyle(CircularProgressViewStyle(tint: neonOrange))
+                    Text("Aider is thinking...")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(neonOrange)
+                    Spacer()
+                }
+                .padding(.horizontal)
+            }
             
-            // === FOOTER ===
-            HStack(spacing: 16) {
-                Menu {
-                    Button("📋 Copy System Prompt") { logic.copyGemSetupGuide() }
-                    Button("🔒 Check Permissions") { openAccessibilitySettings() }
-                } label: {
-                    HStack { Image(systemName: "sparkles"); Text("PAIR") }
-                        .font(.system(size: 12, weight: .bold)).foregroundColor(neonBlue)
-                        .padding(.horizontal, 12).padding(.vertical, 8)
-                        .background(neonBlue.opacity(0.1)).cornerRadius(8)
+            HStack(alignment: .bottom, spacing: 12) {
+                TextEditor(text: $inputText)
+                    .font(.system(size: 13, design: .monospaced))
+                    .frame(minHeight: 40, maxHeight: 120)
+                    .padding(8)
+                    .background(Color.white.opacity(0.05))
+                    .cornerRadius(8)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.white.opacity(0.1), lineWidth: 1)
+                    )
+                    .scrollContentBackground(.hidden)
+
+                Button(action: sendMessage) {
+                    Image(systemName: "paperplane.fill")
+                        .font(.system(size: 16))
+                        .padding(12)
+                        .background(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.gray.opacity(0.3) : neonBlue)
+                        .foregroundColor(.white)
+                        .clipShape(Circle())
                 }
-                .menuStyle(.borderlessButton).focusable(false)
-                
-                Spacer()
-                
-                HStack(spacing: 8) {
-                    GhostActionButton(title: "Apply", icon: "arrow.down", activeColor: neonGreen) { logic.manualApplyFromClipboard() }
-                    GhostActionButton(title: "Review", icon: "eye", activeColor: neonOrange) { logic.reviewLastChange() }
-                }
+                .buttonStyle(.plain)
+                .disabled(inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             .padding(16)
-            .background(Color.black.opacity(0.4))
-            .overlay(Rectangle().frame(height: 1).foregroundColor(Color.white.opacity(0.05)), alignment: .top)
+        }
+        .background(Color.black.opacity(0.4))
+        .overlay(Rectangle().frame(height: 1).foregroundColor(Color.white.opacity(0.05)), alignment: .top)
+    }
+    
+    // MARK: - Actions
+    
+    private func selectProject() {
+        DispatchQueue.main.async {
+            let panel = NSOpenPanel()
+            panel.canChooseFiles = false
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Select Root"
+            NSApp.activate(ignoringOtherApps: true)
+            if panel.runModal() == .OK, let url = panel.url {
+                self.projectPath = url.path
+                UserDefaults.standard.set(url.path, forKey: "ProjectRoot")
+                
+                // 重启 Aider 使用新路径
+                aiderService.stop()
+                aiderService.clearMessages()
+                aiderService.startAider(projectPath: url.path)
+            }
         }
     }
-    .frame(minWidth: 480, maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
-    .cornerRadius(16)
-    .onAppear {
-        toggleAlwaysOnTop()
-        hasPermission = AXIsProcessTrusted()
+    
+    private func sendMessage() {
+        guard !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        aiderService.sendCommand(inputText)
+        inputText = ""
     }
-    .onReceive(permissionTimer) { _ in hasPermission = AXIsProcessTrusted() }
-}
-
-enum AppStatus { case error, warning, processing, ready }
-var currentStatus: AppStatus {
-    if !hasPermission { return .error }
-    if logic.isProcessing { return .processing }
-    if logic.projectRoot.isEmpty { return .warning }
-    return .ready
-}
-var statusColor: Color {
-    switch currentStatus {
-    case .error: return dangerRed
-    case .warning, .processing: return neonOrange
-    case .ready: return neonGreen
-    }
-}
-
-private func toggleAlwaysOnTop() {
-    if let panel = NSApplication.shared.windows.first(where: { $0 is FloatingPanel }) {
-        panel.level = isAlwaysOnTop ? .floating : .normal
-    }
-}
-
-private func openAccessibilitySettings() {
-    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-        NSWorkspace.shared.open(url)
-    }
-}
-}
-
-// MARK: - Subcomponents
-
-struct StatusIndicator: View {
-let status: ContentView.AppStatus
-let color: Color
-var body: some View {
-ZStack {
-if status != .ready {
-Circle().fill(color.opacity(0.3)).frame(width: 12, height: 12)
-.scaleEffect(1.5)
-.animation(.easeInOut(duration: 1.0).repeatForever(autoreverses: true), value: status)
-}
-Circle().fill(color).frame(width: 8, height: 8).shadow(color: color.opacity(0.8), radius: 6)
-}.frame(width: 16)
-}
-}
-
-struct ProjectSelector: View {
-@ObservedObject var logic: GeminiLinkLogic
-let color: Color
-var body: some View {
-Button(action: logic.selectProjectRoot) {
-HStack(spacing: 6) {
-Image(systemName: logic.projectRoot.isEmpty ? "folder.badge.plus" : "folder.fill")
-.font(.system(size: 10)).foregroundColor(logic.projectRoot.isEmpty ? color : .white)
-Text(logic.projectRoot.isEmpty ? "SELECT TARGET" : URL(fileURLWithPath: logic.projectRoot).lastPathComponent.uppercased())
-.font(.system(size: 11, weight: .bold, design: .monospaced))
-.foregroundColor(logic.projectRoot.isEmpty ? color : .white)
-.lineLimit(1).truncationMode(.middle).frame(maxWidth: 140, alignment: .leading)
-Image(systemName: "chevron.down").font(.system(size: 8, weight: .bold)).foregroundColor(.white.opacity(0.3))
-}
-.padding(.horizontal, 10).padding(.vertical, 5)
-.background(logic.projectRoot.isEmpty ? color.opacity(0.1) : Color.white.opacity(0.05))
-.cornerRadius(6)
-.overlay(RoundedRectangle(cornerRadius: 6).stroke(logic.projectRoot.isEmpty ? color.opacity(0.3) : Color.white.opacity(0.1), lineWidth: 0.5))
-.symbolEffect(.pulse, isActive: logic.projectRoot.isEmpty)
-}.buttonStyle(ScaleButtonStyle()).focusable(false)
-}
-}
-
-struct WindowControls: View {
-@Binding var isAlwaysOnTop: Bool
-let toggleAction: () -> Void
-var body: some View {
-HStack(spacing: 12) {
-Button(action: toggleAction) {
-Image(systemName: isAlwaysOnTop ? "pin.fill" : "pin").font(.system(size: 12))
-.foregroundColor(isAlwaysOnTop ? Color.blue : .gray)
-}.buttonStyle(ScaleButtonStyle()).focusable(false)
-Button(action: { NSApplication.shared.terminate(nil) }) {
-Image(systemName: "xmark").font(.system(size: 12, weight: .bold)).foregroundColor(.gray)
-}.buttonStyle(ScaleButtonStyle()).focusable(false)
-}
-}
-}
-
-struct ProcessingBanner: View {
-let status: String
-let color: Color
-var body: some View {
-HStack(spacing: 10) {
-ProgressView().scaleEffect(0.6).progressViewStyle(CircularProgressViewStyle(tint: color))
-Text(status.uppercased()).font(.system(size: 10, weight: .bold, design: .monospaced)).foregroundColor(color)
-Spacer()
-}
-.padding(.horizontal, 16).padding(.bottom, 8)
-.transition(.move(edge: .top).combined(with: .opacity))
-}
-}
-
-struct TransactionCard: View {
-let log: ChangeLog
-let logic: GeminiLinkLogic
-
-@State private var isHovering = false
-
-var body: some View {
-    HStack(spacing: 12) {
-        iconView
-        contentView
-        Spacer()
-        actionsView
-    }
-    .padding(10)
-    .background(isHovering ? Color.white.opacity(0.08) : Color.white.opacity(0.03))
-    .cornerRadius(12)
-    .overlay(RoundedRectangle(cornerRadius: 12).stroke(isHovering ? Color.white.opacity(0.1) : Color.clear, lineWidth: 1))
-    .onHover { hover in withAnimation(.easeInOut(duration: 0.2)) { isHovering = hover } }
-}
-
-private var iconView: some View {
-    ZStack {
-        Circle().fill(Color.white.opacity(0.05)).frame(width: 32, height: 32)
-        Image(systemName: "arrow.up.right").font(.system(size: 12, weight: .bold)).foregroundColor(.white.opacity(0.7))
-    }
-}
-
-private var contentView: some View {
-    VStack(alignment: .leading, spacing: 2) {
-        Text(log.summary).font(.system(size: 13, weight: .medium)).foregroundColor(.white).lineLimit(1)
-        HStack(spacing: 6) {
-            Text(log.commitHash).font(.system(size: 10, design: .monospaced)).foregroundColor(.gray).padding(.horizontal, 4).background(Color.white.opacity(0.05)).cornerRadius(4)
-            Text(timeAgo(log.timestamp)).font(.system(size: 10)).foregroundColor(.gray.opacity(0.7))
+    
+    private func toggleAlwaysOnTop() {
+        if let panel = NSApplication.shared.windows.first(where: { $0 is FloatingPanel }) {
+            isAlwaysOnTop.toggle()
+            panel.level = isAlwaysOnTop ? .floating : .normal
         }
     }
 }
 
-@ViewBuilder
-private var actionsView: some View {
-    // 🟢 FIX 2: Stable rendering (always present, toggle opacity)
-    HStack(spacing: 4) {
-        Button(action: openCommit) {
-            Image(systemName: "safari").foregroundColor(.blue).frame(width: 28, height: 28).background(Color.blue.opacity(0.1)).clipShape(Circle())
-        }.buttonStyle(ScaleButtonStyle()).focusable(false)
-        
-        Button(action: { logic.closePR(for: log) }) {
-            Image(systemName: "xmark").foregroundColor(.red).frame(width: 28, height: 28).background(Color.red.opacity(0.1)).clipShape(Circle())
-        }.buttonStyle(ScaleButtonStyle()).focusable(false)
+// MARK: - Chat Bubble
+
+struct ChatBubble: View {
+    let message: AiderService.ChatMessage
+    let neonBlue: Color
+    
+    var body: some View {
+        HStack {
+            if message.isUser {
+                Spacer()
+                Text(message.content)
+                    .font(.system(size: 13))
+                    .padding(12)
+                    .background(neonBlue)
+                    .foregroundColor(.white)
+                    .cornerRadius(12)
+                    .frame(maxWidth: 400, alignment: .trailing)
+            } else {
+                Text(message.content)
+                    .font(.system(.body, design: .monospaced))
+                    .padding(12)
+                    .background(Color.white.opacity(0.05))
+                    .foregroundColor(.white.opacity(0.9))
+                    .cornerRadius(12)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+                Spacer()
+            }
+        }
     }
-    .opacity(isHovering ? 1 : 0) // Hide instead of remove
-    .animation(.easeInOut(duration: 0.2), value: isHovering)
 }
 
-private func openCommit() {
-    if let str = GitService.shared.getCommitURL(for: log.commitHash, in: logic.projectRoot), let url = URL(string: str) { NSWorkspace.shared.open(url) }
-}
-private func timeAgo(_ date: Date) -> String {
-    let formatter = RelativeDateTimeFormatter(); formatter.unitsStyle = .abbreviated;     return formatter.localizedString(for: date, relativeTo: Date())
-}
-}
-
-struct GhostActionButton: View {
-let title: String; let icon: String; let activeColor: Color; let action: () -> Void
-@State private var isHovering = false
-var body: some View {
-Button(action: action) {
-HStack(spacing: 6) { Image(systemName: icon).font(.system(size: 11, weight: .bold)); Text(title.uppercased()).font(.system(size: 11, weight: .bold)) }
-.padding(.horizontal, 16).padding(.vertical, 8)
-.background(isHovering ? activeColor : Color.white.opacity(0.05))
-.foregroundColor(isHovering ? .black : .gray)
-.cornerRadius(8)
-.overlay(RoundedRectangle(cornerRadius: 8).stroke(isHovering ? activeColor : Color.white.opacity(0.1), lineWidth: 1))
-.shadow(color: isHovering ? activeColor.opacity(0.4) : .clear, radius: 6, x: 0, y: 2)
-}.buttonStyle(ScaleButtonStyle()).focusable(false)
-.onHover { hover in withAnimation(.easeInOut(duration: 0.15)) { isHovering = hover } }
-}
-}
+// MARK: - Scale Button Style
 
 struct ScaleButtonStyle: ButtonStyle {
-func makeBody(configuration: Configuration) -> some View {
-configuration.label.scaleEffect(configuration.isPressed ? 0.95 : 1).animation(.easeInOut(duration: 0.1), value: configuration.isPressed).brightness(configuration.isPressed ? -0.1 : 0)
-}
-}
-
-struct EmptyStateView: View {
-let status: ContentView.AppStatus
-let neonColor: Color; let orangeColor: Color; let dangerColor: Color
-let smartFont: Font; let onFixAction: () -> Void
-
-var body: some View {
-    VStack(spacing: 18) {
-        Button(action: { if status == .error { onFixAction() } }) { birdIcon }.buttonStyle(.plain).focusable(false)
-            .onHover { inside in if inside && status == .error { NSCursor.pointingHand.push() } else { NSCursor.pop() } }
-            .onTapGesture { if status == .error { onFixAction() } }
-        VStack(spacing: 6) {
-            Text(statusText).font(smartFont).foregroundColor(statusTextColor).tracking(4)
-            Text(subStatusText).font(.system(size: 10, weight: .medium)).foregroundColor(.gray.opacity(0.6))
-        }
-    }.frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
-    .onTapGesture { if status == .error { onFixAction() } }
-}
-
-var birdIcon: some View {
-    Group {
-        if #available(macOS 15.0, *) {
-            Image(systemName: "bird.fill").font(.system(size: 48)).foregroundColor(statusTextColor)
-                .symbolEffect(.wiggle, options: .repeating, isActive: status == .ready)
-                .symbolEffect(.pulse, options: .repeating, isActive: status == .error)
-        } else {
-            Image(systemName: "bird.fill").font(.system(size: 48)).foregroundColor(statusTextColor)
-                .symbolEffect(.pulse, isActive: status == .ready || status == .error)
-        }
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.95 : 1)
+            .animation(.easeInOut(duration: 0.1), value: configuration.isPressed)
+            .brightness(configuration.isPressed ? -0.1 : 0)
     }
-}
-
-var statusText: String {
-    switch status {
-    case .ready: return "AWAITING SEEDS"
-    case .error: return "ACCESS LOCKED"
-    case .warning: return "NEED A HOME"
-    case .processing: return "DIGESTING..."
-    }
-}
-var statusTextColor: Color {
-    switch status {
-    case .ready: return neonColor
-    case .error: return dangerColor
-    case .warning, .processing: return orangeColor
-    }
-}
-var subStatusText: String {
-    switch status {
-    case .ready: return "Copy code to feed codebase"
-    case .error: return "Click bird to unlock permissions"
-    case .warning: return "Select project target above"
-    case .processing: return "Applying changes..."
-    }
-}
 }
