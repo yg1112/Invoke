@@ -12,9 +12,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let widthKey = "WindowWidth"
     let heightKey = "WindowHeight"
     
-    func applicationDidFinishLaunching(_ notification: Notification) {
+        func applicationDidFinishLaunching(_ notification: Notification) {
+        // 🚀 Fetch is ready!
         setupMenuBarIcon()
-        
+
         if !UserDefaults.standard.bool(forKey: "hasCompletedOnboarding") {
             showOnboarding()
         } else {
