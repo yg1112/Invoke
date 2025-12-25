@@ -25,7 +25,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func setupMenuBarIcon() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem?.button {
-            // 🐦 品牌重塑：图标改为小鸟
+            // 🐦 小鸟图标
             button.image = NSImage(systemSymbolName: "bird.fill", accessibilityDescription: "Fetch")
             button.action = #selector(togglePanel)
             button.target = self
