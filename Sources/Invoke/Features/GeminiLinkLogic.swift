@@ -122,7 +122,14 @@ class GeminiLinkLogic: ObservableObject {
         
         guard let content = pasteboard.string(forType: .string) else { return }
         
-        // 🛑 安全检查：如果不包含魔法头，直接忽略
+        // 🛑 核心修复：如果这是系统说明书（Prompt），绝对不要执行！
+        // 否则 App 会以为这是 Gemini 发来的代码，尝试创建假文件并 Push，导致 Git 弹窗。
+        if content.contains("[System Instruction: Fetch App Protocol]") {
+            print("🛡️ Ignoring System Prompt clipboard copy")
+            return
+        }
+        
+        // 🔒 安全检查：如果不包含魔法头，直接忽略
         guard content.contains(magicHeader) else {
             if !content.contains("@code") {
                 lastUserClipboard = content
