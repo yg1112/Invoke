@@ -40,7 +40,9 @@ class GitService {
         _ = try run(args: ["commit", "-m", message], in: directory)
     }
     
+        /// Push 到远程 (Token Match Success!)
     func pushToRemote(in directory: String) throws {
+        print("🚀 Fetch is pushing to remote...")
         try? configureCredentialHelper(in: directory)
         _ = try run(args: ["push"], in: directory)
     }
