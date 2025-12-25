@@ -238,8 +238,6 @@ private func commitAndPush(_ msg: String) {
 
 // MARK: - User Facing
 func copyGemSetupGuide() {
-    // 🔥 这里是核心修正：使用变量插值来生成 Prompt，而不是直接写死字符串
-    // 这样剪贴板里的源码本身就不会包含完整的标记
     let header = "[System Instruction: " + "Fetch App Protocol]"
     
     let text = """
