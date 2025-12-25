@@ -2,6 +2,7 @@ import SwiftUI
 import Combine
 import AppKit
 
+// MARK: - Models
 struct ChangeLog: Identifiable, Codable {
     var id: String { commitHash }
     let commitHash: String
@@ -54,9 +55,13 @@ class GeminiLinkLogic: ObservableObject {
     private var lastChangeCount: Int = 0
     private var lastUserClipboard: String = ""
     
-    private let magicHeader = ">>> INVOKE"
-    private let fileHeader = ">>> FILE:"
-    private let searchStart = "<<<<<<< SEARCH"
+    // 🛡️ 安全拆分：防止被解析器误读
+    private let magicHeader = ">>>" + " INVOKE"
+    private let fileHeader = ">>>" + " FILE:"
+    private let searchStart = "<<<<<<<" + " SEARCH"
+    private let replaceEnd = ">>>>>>>" + " REPLACE"
+    private let newFileStart = "<<<" + "FILE>>>"
+    private let newFileEnd = "<<<" + "END>>>"
     
     init() {
         if !projectRoot.isEmpty {
@@ -93,15 +98,17 @@ class GeminiLinkLogic: ObservableObject {
         lastChangeCount = pasteboard.changeCount
         guard let content = pasteboard.string(forType: .string) else { return }
         
-        // 🔒 巧妙的拆分，防止自我屏蔽
+        // 🛑 防误触：忽略 System Instruction
         let ignoreSig = "[System Instruction: " + "Fetch App Protocol]"
         if content.contains(ignoreSig) {
             print("🛡️ Ignoring System Prompt")
             return
         }
         
+        // 🛑 防误触：忽略 Review Request
         if content.contains("[Fetch Review Request]") { return }
         
+        // 🔒 安全锁
         guard content.contains(magicHeader) else {
             if !content.contains("@code") { lastUserClipboard = content }
             return
@@ -134,7 +141,9 @@ class GeminiLinkLogic: ObservableObject {
     }
     
     private func parseFull(_ text: String) -> [FilePayload] {
-        let regex = try! NSRegularExpression(pattern: #"(?s)<<<FILE>>>\s*([^\n]+)\n(.*?)\n<<<END>>>"#)
+        // 使用拆分的字符串构建正则，防止自指
+        let p = "(?s)" + newFileStart + "\\s*([^\\n]+)\\n(.*?)\\n" + newFileEnd
+        let regex = try! NSRegularExpression(pattern: p)
         let matches = regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
         return matches.compactMap { m -> FilePayload? in
             guard let r1 = Range(m.range(at: 1), in: text), let r2 = Range(m.range(at: 2), in: text) else { return nil }
@@ -159,7 +168,8 @@ class GeminiLinkLogic: ObservableObject {
         let url = URL(fileURLWithPath: projectRoot).appendingPathComponent(path)
         guard let d = try? Data(contentsOf: url), var content = String(data: d, encoding: .utf8) else { return (false, false) }
         
-        let regex = try! NSRegularExpression(pattern: #"(?s)<<<<<<< SEARCH\s*\n(.*?)\n=======\s*\n(.*?)\n>>>>>>> REPLACE"#)
+        let p = "(?s)" + searchStart + "\\s*\\n(.*?)\\n=======\\s*\\n(.*?)\\n" + replaceEnd
+        let regex = try! NSRegularExpression(pattern: p)
         let matches = regex.matches(in: patch, range: NSRange(patch.startIndex..<patch.endIndex, in: patch))
         var mod = false
         
@@ -169,7 +179,7 @@ class GeminiLinkLogic: ObservableObject {
             let replace = String(patch[r2])
             if search.hasPrefix("```") { search = search.replacingOccurrences(of: "```", with: "") }
             
-            // Level 1-4 Matching Logic
+            // Levels 1-4
             if let r = content.range(of: search) { content.replaceSubrange(r, with: replace); mod = true; continue }
             if let r = fuzzyMatch(search, content) { content.replaceSubrange(r, with: replace); mod = true; continue }
             if let r = tokenMatch(search, content) { content.replaceSubrange(r, with: replace); mod = true; continue }
@@ -233,7 +243,6 @@ class GeminiLinkLogic: ObservableObject {
     
     // MARK: - User Facing
     func copyGemSetupGuide() {
-        // 🔓 破解自我屏蔽：拼接字符串
         let header = "[System Instruction: " + "Fetch App Protocol]"
         let text = """
         \(header)
@@ -274,6 +283,8 @@ class GeminiLinkLogic: ObservableObject {
             DispatchQueue.main.async {
                 self.setStatus("", isBusy: false)
                 self.pasteboard.clearContents(); self.pasteboard.setString(p, forType: .string)
+                
+                // 🔥 触发幽灵注入
                 MagicPaster.shared.pasteToBrowser()
             }
         }
