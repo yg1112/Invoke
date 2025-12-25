@@ -84,38 +84,31 @@ class LoginWindowController: NSWindowController, WKNavigationDelegate, NSWindowD
         self.hasTriggeredSuccess = false
         
         // --- 核心修复：复活 WebView ---
-        // 1. 如果 WebView 被移除了，重新添加到窗口
+        // 如果 WebView 被移除了（superview 为 nil），重新添加到 contentView
         if webView.superview == nil {
-            guard let window = self.window else { return }
-            
-            // 确保 contentView 存在
-            if window.contentView == nil {
-                window.contentView = NSView()
+            // 使用 Auto Layout 重新添加
+            if let contentView = self.window?.contentView {
+                contentView.addSubview(self.webView)
+                // 重新激活约束
+                NSLayoutConstraint.activate([
+                    self.webView.topAnchor.constraint(equalTo: contentView.topAnchor),
+                    self.webView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+                    self.webView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+                    self.webView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
+                ])
             }
-            
-            let contentView = window.contentView!
-            
-            // 重新添加 WebView 并设置约束
-            webView.translatesAutoresizingMaskIntoConstraints = false
-            contentView.addSubview(webView)
-            
-            NSLayoutConstraint.activate([
-                webView.topAnchor.constraint(equalTo: contentView.topAnchor),
-                webView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-                webView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
-                webView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
-            ])
         }
         
-        // 2. 重新连接代理 (之前为了防崩溃断开了)
+        // 重新连接代理 (防止之前被 nil 掉)
         webView.navigationDelegate = self
         // ---------------------------
         
-        // 4. 关键：不再切换 ActivationPolicy
-        // 直接前台显示 Panel
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        
         self.showWindow(nil)
         self.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        self.window?.level = .floating
         
         let url = URL(string: "https://accounts.google.com/ServiceLogin?continue=https://gemini.google.com/app")!
         webView.load(URLRequest(url: url))

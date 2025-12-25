@@ -126,21 +126,62 @@ class GeminiWebManager: NSObject, ObservableObject {
         pendingPromptId = UUID().uuidString
         responseCallback = completion
         
-        let escapedText = text
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-            .replacingOccurrences(of: "\n", with: "\\n")
-            .replacingOccurrences(of: "\r", with: "")
-        
-        let js = """
-        window.__fetchBridge.sendPrompt("\(escapedText)", "\(model)", "\(pendingPromptId!)");
+        // 先执行清理脚本，关闭干扰弹窗
+        let cleanupScript = """
+        (function() {
+            // 1. 尝试点击 "Close", "No thanks", "Maybe later" 等按钮
+            const buttons = Array.from(document.querySelectorAll('button'));
+            const dismissBtns = buttons.filter(b => {
+                const text = b.innerText || '';
+                const ariaLabel = b.getAttribute('aria-label') || '';
+                return text.match(/Close|No thanks|Maybe later|Got it|Dismiss/i) || 
+                       ariaLabel.match(/Close|Dismiss/i);
+            });
+            dismissBtns.forEach(b => {
+                try { b.click(); } catch(e) {}
+            });
+            
+            // 2. 返回当前状态诊断
+            return {
+                url: window.location.href,
+                hasInput: !!(document.querySelector('div[contenteditable="true"]') || 
+                            document.querySelector('rich-textarea') ||
+                            document.querySelector('div[role="textbox"]')),
+                bodyLength: document.body ? document.body.innerText.length : 0,
+                htmlPreview: document.body ? document.body.innerHTML.substring(0, 500) : ''
+            };
+        })();
         """
         
-        webView.evaluateJavaScript(js) { _, error in
+        webView.evaluateJavaScript(cleanupScript) { [weak self] result, error in
+            guard let self = self else { return }
+            
             if let error = error {
-                print("❌ JS Error: \(error)")
-                self.isProcessing = false
-                completion("Error: \(error.localizedDescription)")
+                print("⚠️ Cleanup script error: \(error.localizedDescription)")
+            } else if let diagnostic = result as? [String: Any] {
+                print("🔍 Page diagnostic: URL=\(diagnostic["url"] ?? "unknown"), hasInput=\(diagnostic["hasInput"] ?? false)")
+                if let htmlPreview = diagnostic["htmlPreview"] as? String, !htmlPreview.isEmpty {
+                    print("📄 HTML preview (first 500 chars): \(htmlPreview)")
+                }
+            }
+            
+            // 继续发送 prompt
+            let escapedText = text
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\\"")
+                .replacingOccurrences(of: "\n", with: "\\n")
+                .replacingOccurrences(of: "\r", with: "")
+            
+            let js = """
+            window.__fetchBridge.sendPrompt("\(escapedText)", "\(model)", "\(self.pendingPromptId!)");
+            """
+            
+            self.webView.evaluateJavaScript(js) { _, error in
+                if let error = error {
+                    print("❌ JS Error: \(error)")
+                    self.isProcessing = false
+                    completion("Error: \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -151,6 +192,18 @@ class GeminiWebManager: NSObject, ObservableObject {
     func askGemini(prompt: String, model: String = "default") async throws -> String {
         return try await withCheckedThrowingContinuation { continuation in
             guard self.isReady && self.isLoggedIn else {
+                // 增加调试日志
+                print("❌ askGemini failed: isReady=\(self.isReady), isLoggedIn=\(self.isLoggedIn)")
+                
+                // 获取页面 HTML 摘要用于调试
+                DispatchQueue.main.async { [weak self] in
+                    self?.webView.evaluateJavaScript("document.body ? document.body.innerHTML.substring(0, 500) : 'no body'") { result, _ in
+                        if let htmlPreview = result as? String {
+                            print("📄 Current page HTML preview (first 500 chars): \(htmlPreview)")
+                        }
+                    }
+                }
+                
                 continuation.resume(throwing: GeminiError.notReady)
                 return
             }
@@ -554,11 +607,26 @@ extension GeminiWebManager {
                         await this.switchModel(model);
                     }
                     
-                    // 找到输入框
+                    // 清理干扰弹窗
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    const dismissBtns = buttons.filter(b => {
+                        const text = (b.innerText || '').trim();
+                        const ariaLabel = b.getAttribute('aria-label') || '';
+                        return text.match(/Close|No thanks|Maybe later|Got it|Dismiss|I agree|Accept/i) || 
+                               ariaLabel.match(/Close|Dismiss/i);
+                    });
+                    dismissBtns.forEach(b => {
+                        try { b.click(); } catch(e) {}
+                    });
+                    await this.sleep(300);
+                    
+                    // 找到输入框（更新选择器列表）
                     const inputArea = await this.waitForElement([
                         'div[contenteditable="true"]',
+                        'rich-textarea',
+                        'div[role="textbox"]',
                         'rich-textarea div p',
-                        '[role="textbox"]'
+                        'textarea[aria-label*="message"]'
                     ]);
                     
                     inputArea.focus();
