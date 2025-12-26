@@ -145,7 +145,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         
         if let panel = floatingPanel {
             panel.delegate = self
-            panel.level = .floating 
+            panel.level = .floating
+            panel.hidesOnDeactivate = false
             panel.titlebarAppearsTransparent = true
             panel.titleVisibility = .hidden
             panel.isMovableByWindowBackground = true

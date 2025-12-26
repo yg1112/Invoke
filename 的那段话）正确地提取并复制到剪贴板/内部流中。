@@ -1,0 +1,90 @@
+
+正则解析失败：Agent 声称修复了 V3 协议，但可能正则写得太严，导致匹配失败（比如换行符问题）。
+
+对策：必须“埋点”，在 App 的控制台输出它到底看没看到 Gemini 的回复，以及解析出了什么。
+
+窗口自动隐藏/层级问题：
+
+这是 macOS NSWindow 的默认行为。当你切换到 Aider（终端）时，Fetch 失去了焦点。
+
+对策：需要在代码中强制设置窗口级别为 floating (置顶)，并禁止自动隐藏。
+
+👨‍💻 给 Agent 的指令：埋点诊断与窗口置顶
+
+请将以下指令发送给 Agent，这包含了一个自检脚本和UI 强制置顶的修改。
+
+🛑 任务：系统埋点诊断与窗口置顶 (Diagnostics & UI Fix)
+
+用户反馈 Protocol V3 依然无法工作（Aider 卡在 Thinking），且窗口容易丢失。请执行以下 3 步修复：
+
+Step 1: 强制窗口置顶 (BrowserWindow.swift)
+
+用户希望 App 默认 "Pin" 在最前。
+
+Action: 修改 Sources/Invoke/UI/Windows/BrowserWindow.swift。
+
+在创建 NSWindow 的代码块中（或 init 里），添加：
+
+Swift
+
+
+
+window.level = .floating // 强制置顶
+
+window.hidesOnDeactivate = false // 失去焦点不隐藏
+
+window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary] // 允许在所有桌面显示
+
+确保这在 App 启动时默认生效。
+
+Step 2: 注入“埋点”日志 (GeminiLinkLogic.swift)
+
+我们需要知道 V3 解析到底死在哪一步。请在 GeminiLinkLogic.swift 的 checkClipboard 和 parseXMLFiles 方法中添加高可见度的 Debug Print：
+
+Action: 更新 checkClipboard：
+
+Swift
+
+
+
+print("📋 Clipboard Changed. Content length: \(content.count)")if content.contains(">>> INVOKE") {
+
+    print("✅ Detected Trigger '>>> INVOKE'")
+
+    print("📄 Raw Content Snippet: \(content.prefix(100))...") 
+
+}
+
+Action: 更新 parseXMLFiles (确保 V3 正则存在)：
+
+Swift
+
+
+
+// 在正则匹配前打印print("🔍 Trying to parse Protocol V3...")let v3Pattern = "!!!FILE_START!!!\\s+([^\\n]+)\\n(.*?)\\n!!!FILE_END!!!"// ... (执行匹配)print("📊 V3 Matches Found: \(matches.count)")if matches.count == 0 {
+
+    print("⚠️ V3 Regex Failed. checking if content contains tags...")
+
+    if text.contains("!!!FILE_START!!!") { print("❗ Text HAS tags but Regex failed. Check newlines.") }
+
+}
+
+Step 3: 创建“模拟注入”脚本 (test_v3_injection.sh)
+
+为了排除 Aider 和 Gemini 的干扰，直接测试 Fetch 的解析能力。创建脚本 test_v3_injection.sh：
+
+内容: 使用 pbcopy 将一段标准的 V3 格式文本写入剪贴板。
+
+Bash
+
+
+
+#!/bin/bashecho "💉 Injecting V3 Payload to Clipboard..."read -r -d '' PAYLOAD << EOM
+
+>>> INVOKE
+
+!!!FILE_START!!! v3_debug_test.txt
+
+Diagnostic confirmed.
+
+The V3 protocol is active.

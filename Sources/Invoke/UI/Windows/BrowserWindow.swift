@@ -40,6 +40,8 @@ class BrowserWindowController: NSObject, ObservableObject {
         newWindow.center()
         newWindow.delegate = self
         newWindow.level = .floating
+        newWindow.hidesOnDeactivate = false
+        newWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         
         self.window = newWindow
         self.isShowing = true
@@ -215,6 +217,8 @@ struct LoginMethodsView: View {
         webWindow.contentView = NSHostingView(rootView: WebLoginView(onSuccess: onLoginSuccess))
         webWindow.center()
         webWindow.level = .floating
+        webWindow.hidesOnDeactivate = false
+        webWindow.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         webWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }

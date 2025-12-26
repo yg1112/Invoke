@@ -96,5 +96,6 @@ aider \
     --openai-api-base "$OPENAI_API_BASE" \
     --openai-api-key "$OPENAI_API_KEY" \
     --no-git \
+    --no-show-model-warnings \
     "$PROJECT_PATH"
 

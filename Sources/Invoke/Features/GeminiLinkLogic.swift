@@ -108,20 +108,23 @@ class GeminiLinkLogic: ObservableObject {
         lastChangeCount = pasteboard.changeCount
         guard let content = pasteboard.string(forType: .string) else { return }
         
+        print("📋 Clipboard Changed. Content length: \(content.count)")
+        
         // 🛑 Ignore System Prompts to prevent loops
         let ignoreSig = "[System Instruction: " + "Fetch Protocol]"
         if content.contains(ignoreSig) { return }
         if content.contains("[Fetch Review Request]") { return }
         
         // 🔒 Trigger Check
-        guard content.contains(magicTrigger) else {
+        if content.contains(magicTrigger) {
+            print("✅ Detected Trigger '>>> INVOKE'")
+            print("📄 Raw Content Snippet: \(content.prefix(100))...")
+            print("⚡️ Detected >>> INVOKE trigger")
+            processAllChanges(content)
+        } else {
             // Only backup user clipboard if it's NOT code intended for us
             if !content.contains(tagFileStart) { lastUserClipboard = content }
-            return
         }
-        
-        print("⚡️ Detected >>> INVOKE trigger")
-        processAllChanges(content)
     }
     
     private func processAllChanges(_ rawText: String) {
@@ -152,6 +155,8 @@ class GeminiLinkLogic: ObservableObject {
     private func parseXMLFiles(_ text: String) -> [FilePayload] {
         var payloads: [FilePayload] = []
         
+        print("🔍 Trying to parse Protocol V3...")
+        
         // ----------------------------------------------------
         // Strategy A: Protocol V3 (!!!FILE_START!!!) - PREFERRED
         // ----------------------------------------------------
@@ -160,12 +165,23 @@ class GeminiLinkLogic: ObservableObject {
         if let v3Regex = try? NSRegularExpression(pattern: v3Pattern, options: [.dotMatchesLineSeparators]) {
             let matches = v3Regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
             
+            print("📊 V3 Matches Found: \(matches.count)")
+            
+            if matches.count == 0 {
+                print("⚠️ V3 Regex Failed. checking if content contains tags...")
+                if text.contains("!!!FILE_START!!!") {
+                    print("❗ Text HAS tags but Regex failed. Check newlines.")
+                    print("📝 Content snippet around tags: \(text.components(separatedBy: "!!!FILE_START!!!").dropFirst().first?.prefix(200) ?? "N/A")")
+                }
+            }
+            
             let v3Payloads = matches.compactMap { m -> FilePayload? in
                 guard let rPath = Range(m.range(at: 1), in: text),
                       let rContent = Range(m.range(at: 2), in: text) else { return nil }
                 
                 let path = String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines)
                 let content = String(text[rContent])
+                print("✅ Parsed V3 file: \(path) (content length: \(content.count))")
                 return FilePayload(path: path, content: content)
             }
             payloads.append(contentsOf: v3Payloads)

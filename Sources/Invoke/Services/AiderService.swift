@@ -131,7 +131,8 @@ class AiderService: ObservableObject {
             "--openai-api-key", "fetch-local-key", // 骗过校验
             "--no-git",     // 我们自己处理 git
             "--yes",        // 自动应用更改
-            "--no-auto-commits"
+            "--no-auto-commits",
+            "--no-show-model-warnings"  // 禁止模型警告，避免打开网页和卡在确认界面
         ]
         
         let inPipe = Pipe()

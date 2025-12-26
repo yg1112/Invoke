@@ -1,0 +1,2 @@
+Diagnostic confirmed.
+The V3 protocol is active.
