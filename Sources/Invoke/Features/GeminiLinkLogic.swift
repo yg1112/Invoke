@@ -134,13 +134,11 @@ class GeminiLinkLogic: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            // 1. Sanitize: Remove Markdown code fences if AI added them
-            let cleanText = self.sanitizeContent(rawText)
-            
+            // 1. Use raw text directly - parser needs to handle all formats
             var modified: Set<String> = []
             
-            // 2. Parse XML Files
-            let files = self.parseXMLFiles(cleanText)
+            // 2. Parse Files (V3, V2, and Aider Markdown)
+            let files = self.parseFiles(rawText)
             for f in files {
                 if self.writeFile(f.path, f.content) {
                     modified.insert(f.path)
@@ -151,8 +149,8 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    // 🔥 Core Parser for V2 & V3 Protocol
-    private func parseXMLFiles(_ text: String) -> [FilePayload] {
+    // 🔥 Core Parser for V2, V3 & Aider Markdown Protocol
+    private func parseFiles(_ text: String) -> [FilePayload] {
         var payloads: [FilePayload] = []
         
         print("🔍 Trying to parse Protocol V3...")
@@ -207,7 +205,30 @@ class GeminiLinkLogic: ObservableObject {
             payloads.append(contentsOf: v2Payloads)
         }
         
-        print("🔍 Parsed \(payloads.count) files (V3+V2 mixed)")
+        // ----------------------------------------------------
+        // Strategy C: Aider Markdown (```filepath:...)
+        // ----------------------------------------------------
+        // Regex: ```filepath:path/to/file.ext\ncontent\n```
+        let markdownPattern = "```filepath:\\s*([^\\n]+)\\n(.*?)\\n```"
+        if let mdRegex = try? NSRegularExpression(pattern: markdownPattern, options: [.dotMatchesLineSeparators]) {
+            let matches = mdRegex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
+            
+            let mdPayloads = matches.compactMap { m -> FilePayload? in
+                guard let rPath = Range(m.range(at: 1), in: text),
+                      let rContent = Range(m.range(at: 2), in: text) else { return nil }
+                
+                let path = String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let content = String(text[rContent])
+                print("✅ Parsed Aider Markdown file: \(path) (content length: \(content.count))")
+                return FilePayload(path: path, content: content)
+            }
+            payloads.append(contentsOf: mdPayloads)
+            if !mdPayloads.isEmpty {
+                print("✅ Parsed Aider Markdown: \(mdPayloads.count) files")
+            }
+        }
+        
+        print("🔍 Parsed \(payloads.count) files (V3+V2+Markdown mixed)")
         return payloads
     }
     
