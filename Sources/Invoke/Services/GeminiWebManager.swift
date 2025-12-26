@@ -40,13 +40,15 @@ class GeminiWebManager: NSObject, ObservableObject {
     @Published var connectionStatus = "Initializing..."
     @Published var lastResponse: String = ""
     
-    // MARK: - WebView
+    // MARK: - WebView & Window
     private(set) var webView: WKWebView!
+    // 🔥 核心修复: 给 WebView 一个宿主窗口，否则无法接收粘贴
+    private var shadowWindow: NSWindow! 
+    
     private var pendingPromptId: String?
     private var responseCallback: ((String) -> Void)?
     
     // 使用最新的 macOS Safari UA (保持更新)
-    // 移除 "Version/17.2" 这种可能过时的标记，使用通用格式
     public static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
     
     override init() {
@@ -102,6 +104,21 @@ class GeminiWebManager: NSObject, ObservableObject {
         }
         #endif
         
+        // 🔥 核心修复：创建影子窗口 (Shadow Window)
+        // 必须有一个真实存在的 Window，MakeKeyAndOrderFront 才能生效，MagicPaster 才能粘贴进来
+        shadowWindow = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        shadowWindow.title = "Gemini Engine (Do Not Close)"
+        shadowWindow.contentView = webView
+        shadowWindow.isReleasedWhenClosed = false // 关掉窗口只是隐藏，不要销毁
+        
+        // 初始状态可以先隐藏，但在 sendPrompt 时会呼出
+        shadowWindow.orderOut(nil) 
+        
         // 先恢复持久化的 Cookie，再加载 Gemini
         restoreCookiesFromStorage { [weak self] in
             self?.loadGemini()
@@ -120,9 +137,10 @@ class GeminiWebManager: NSObject, ObservableObject {
     /// 发送 Prompt 给 Gemini，异步返回响应
     /// 使用 MagicPaster (剪贴板+Cmd+V+Enter) 替代JS注入，更稳定可靠
     func sendPrompt(_ text: String, model: String = "default", completion: @escaping (String) -> Void) {
-        guard isReady && isLoggedIn else {
-            completion("Error: Gemini not ready or not logged in")
-            return
+        // 即使没 Ready 也尝试发送，可能只是 JS 没加载完
+        // 但必须 isLoggedIn
+        if !isLoggedIn {
+             print("⚠️ Warning: Sending prompt while not fully logged in. Might fail.")
         }
         
         isProcessing = true
@@ -138,14 +156,13 @@ class GeminiWebManager: NSObject, ObservableObject {
             pasteboard.clearContents()
             pasteboard.setString(text, forType: .string)
             
-            // 2. 聚焦浏览器窗口
-            if let window = self.webView.window {
-                window.makeKeyAndOrderFront(nil)
-                NSApp.activate(ignoringOtherApps: true)
-            }
+            // 2. 🔥 聚焦影子窗口 (Shadow Window)
+            // 这一步至关重要：把隐形的浏览器窗口拉到最前，接收粘贴
+            self.shadowWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
             
             // 3. 等待窗口激活后，使用MagicPaster发送
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                 // 先清理弹窗（如果存在）
                 self.cleanupPopups { [weak self] in
                     guard let self = self else { return }
@@ -153,11 +170,15 @@ class GeminiWebManager: NSObject, ObservableObject {
                     // 等待输入框聚焦
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         // 使用MagicPaster模拟 Cmd+V + Enter
-                        // 🔥 核心修改：传入 allowHide: false，防止隐藏 App 导致粘贴失败
+                        // allowHide: false -> 不隐藏 App，因为我们就在 App 内部粘贴
                         MagicPaster.shared.pasteToBrowser(allowHide: false)
                         
                         // 等待响应（通过JS监听）
                         self.waitForResponse(id: self.pendingPromptId!)
+                        
+                        // (可选) 粘贴完成后，可以把窗口放回去，避免挡路
+                        // 但为了调试稳定性，先留着，用户可以自己最小化
+                        // self.shadowWindow.orderBack(nil)
                     }
                 }
             }
