@@ -2,26 +2,6 @@ import Foundation
 import WebKit
 import Combine
 import AppKit
-import os.log
-
-// MARK: - Debug Logger
-extension GeminiWebManager {
-    static func debugLog(_ message: String, category: String = "GeminiWebManager") {
-        let logMessage = "[\(category)] \(message)"
-        print(logMessage)
-        // 同时写入文件
-        let logFile = FileManager.default.temporaryDirectory.appendingPathComponent("fetch_debug.log")
-        if let data = (logMessage + "\n").data(using: .utf8) {
-            if let fileHandle = try? FileHandle(forWritingTo: logFile) {
-                fileHandle.seekToEndOfFile()
-                fileHandle.write(data)
-                fileHandle.closeFile()
-            } else {
-                try? data.write(to: logFile)
-            }
-        }
-    }
-}
 
 // MARK: - InteractiveWebView 子类
 /// 解决 WKWebView 在 SwiftUI 中无法接收键盘输入的问题
@@ -500,25 +480,19 @@ extension GeminiWebManager: WKScriptMessageHandler {
             let content = body["content"] as? String ?? ""
             let id = body["id"] as? String ?? ""
             
-            Self.debugLog("🟣 [Swift Debug] WebManager received response. ID: \(id), Length: \(content.count)")
+            print("📥 Response received (id: \(id), length: \(content.count))")
             
             DispatchQueue.main.async { [weak self] in
                 self?.isProcessing = false
                 self?.lastResponse = content
                 
-                // Path 1: API Callback (Aider)
-                if let callback = self?.responseCallback {
-                    Self.debugLog("🟣 [Swift Debug] Returning content to API Callback (Aider)")
-                    callback(content)
-                    self?.responseCallback = nil
-                } else {
-                    Self.debugLog("⚠️ [Swift Debug] No API callback found! Aider might have timed out.")
-                }
+                // 1. 原有路径：返回给 API 调用者 (如 Aider)
+                self?.responseCallback?(content)
+                self?.responseCallback = nil
                 
-                // Path 2: File System Bridge (The Missing Link)
+                // 2. 🔥 核心修复路径：将响应内容注入文件处理管线
                 if !content.isEmpty {
-                    Self.debugLog("⚡️ [Swift Debug] Bridging content to GeminiLinkLogic for parsing...")
-                    // 强制调用，不要加条件判断
+                    print("⚡️ [Bridge] Forwarding content to GeminiLinkLogic...")
                     GeminiLinkLogic.shared.processResponse(content)
                 }
             }
@@ -538,10 +512,6 @@ extension GeminiWebManager: WKScriptMessageHandler {
         case "STATUS":
             let status = body["status"] as? String ?? ""
             print("📊 Bridge Status: \(status)")
-            
-        case "LOG":
-            let message = body["message"] as? String ?? ""
-            Self.debugLog("[JS Debug] \(message)", category: "JS")
             
         default:
             print("⚠️ Unknown message type: \(type)")
@@ -660,11 +630,6 @@ extension GeminiWebManager {
                                    .replace(/^\\s*Thinking\\s*$/gim, '');
                         text = text.trim();
                     }
-                    
-                    // Step 1: JS 侧"造影剂"埋点
-                    const debugSummary = text.substring(0, 100).replace(/\\n/g, '\\\\n');
-                    console.log(`[JS Debug] Scraped content length: ${text.length}, Preview: ${debugSummary}`);
-                    self.postToSwift({ type: 'LOG', message: `JS Scraped: ${text.length} chars. Start: ${debugSummary}` });
                     
                     // 如果仍然没有找到，记录调试信息
                     if (!text || text.length === 0) {
@@ -850,4 +815,3 @@ extension GeminiWebManager {
     })();
     """
 }
-

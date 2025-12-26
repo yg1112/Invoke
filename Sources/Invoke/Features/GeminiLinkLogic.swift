@@ -3,25 +3,6 @@ import Combine
 import AppKit
 import UserNotifications
 
-// MARK: - Debug Logger
-extension GeminiLinkLogic {
-    static func debugLog(_ message: String) {
-        let logMessage = "[Logic Debug] \(message)"
-        print(logMessage)
-        // 同时写入文件
-        let logFile = FileManager.default.temporaryDirectory.appendingPathComponent("fetch_debug.log")
-        if let data = (logMessage + "\n").data(using: .utf8) {
-            if let fileHandle = try? FileHandle(forWritingTo: logFile) {
-                fileHandle.seekToEndOfFile()
-                fileHandle.write(data)
-                fileHandle.closeFile()
-            } else {
-                try? data.write(to: logFile)
-            }
-        }
-    }
-}
-
 // MARK: - Models
 struct ChangeLog: Identifiable, Codable {
     var id: String { commitHash }
@@ -138,7 +119,7 @@ class GeminiLinkLogic: ObservableObject {
         if content.contains(magicTrigger) {
             print("✅ Detected Trigger '>>> INVOKE'")
             print("📄 Raw Content Snippet: \(content.prefix(100))...")
-            print("⚡️ Detected >>> INVOKE trigger")
+            print("⚡️ Detected >>> INVOKE trigger via Clipboard")
             processResponse(content)
         } else {
             // Only backup user clipboard if it's NOT code intended for us
@@ -146,28 +127,30 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
+    // 🔥 PUBLIC API for WebManager & Clipboard (Renamed from processAllChanges)
     func processResponse(_ rawText: String) {
-        Self.debugLog("🔵 [Logic Debug] processResponse called. Input length: \(rawText.count)")
-        restoreUserClipboardImmediately()
-        setStatus("Processing...", isBusy: true)
+        // API调用时不恢复剪贴板，以免干扰用户
+        // restoreUserClipboardImmediately()
         
-        // 🛡️ Thread Safety: Capture projectRoot on main thread before async
-        let root = projectRoot
+        setStatus("Processing...", isBusy: true)
+        print("🔵 [Logic Debug] processResponse called. Input length: \(rawText.count)")
         
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             
-            // ⚠️ 关键修改：直接使用 rawText，不再调用 sanitizeContent，以免破坏 Markdown 结构
+            // ⚠️ 关键修改：直接使用 rawText，不调用 sanitizeContent，以免破坏 Markdown 结构
             let files = self.parseFiles(rawText)
-            Self.debugLog("🔵 [Logic Debug] Parser found \(files.count) files.")
+            
             if files.isEmpty {
-                Self.debugLog("❌ [Logic Debug] PARSE FAILED. Dumping raw text snippet for regex check:")
-                Self.debugLog(String(rawText.prefix(300)))
+                print("⚠️ No files parsed! Dumping snippet:")
+                print(rawText.prefix(300))
+            } else {
+                print("✅ Parsed \(files.count) files.")
             }
             
             var modified: Set<String> = []
             for f in files {
-                if self.writeFile(f.path, f.content, projectRoot: root) {
+                if self.writeFile(f.path, f.content) {
                     modified.insert(f.path)
                 }
             }
@@ -186,25 +169,29 @@ class GeminiLinkLogic: ObservableObject {
         let v3Pattern = "!!!FILE_START!!!\\s+([^\\n]+)\\n(.*?)\\n!!!FILE_END!!!"
         if let v3Regex = try? NSRegularExpression(pattern: v3Pattern, options: [.dotMatchesLineSeparators]) {
             let matches = v3Regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
-            payloads.append(contentsOf: matches.compactMap { m -> FilePayload? in
+            let v3Files = matches.compactMap { m -> FilePayload? in
                 guard let rPath = Range(m.range(at: 1), in: text),
                       let rContent = Range(m.range(at: 2), in: text) else { return nil }
                 return FilePayload(path: String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines), content: String(text[rContent]))
-            })
+            }
+            if !v3Files.isEmpty { print("🔹 Found \(v3Files.count) V3 Protocol files") }
+            payloads.append(contentsOf: v3Files)
         }
         
         // ----------------------------------------------------
         // Strategy B: Aider Markdown (```filepath:...)
         // ----------------------------------------------------
-        // Regex matches: ```filepath: path/to/file \n content \n ``` (允许结尾没有换行)
-        let mdPattern = "```filepath:\\s*([^\\n]+)\\n(.*?)\\n?```"
+        // Regex matches: ```filepath: path/to/file \n content \n ```
+        let mdPattern = "```filepath:\\s*([^\\n]+)\\n(.*?)\\n```"
         if let mdRegex = try? NSRegularExpression(pattern: mdPattern, options: [.dotMatchesLineSeparators]) {
             let matches = mdRegex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
-            payloads.append(contentsOf: matches.compactMap { m -> FilePayload? in
+            let mdFiles = matches.compactMap { m -> FilePayload? in
                 guard let rPath = Range(m.range(at: 1), in: text),
                       let rContent = Range(m.range(at: 2), in: text) else { return nil }
                 return FilePayload(path: String(text[rPath]).trimmingCharacters(in: .whitespacesAndNewlines), content: String(text[rContent]))
-            })
+            }
+            if !mdFiles.isEmpty { print("🔹 Found \(mdFiles.count) Markdown files") }
+            payloads.append(contentsOf: mdFiles)
         }
         
         // ----------------------------------------------------
@@ -213,37 +200,30 @@ class GeminiLinkLogic: ObservableObject {
         let v2Pattern = "<FILE_CONTENT\\s+path=\"([^\"]+)\"\\s*>(.*?)</FILE_CONTENT>"
         if let v2Regex = try? NSRegularExpression(pattern: v2Pattern, options: [.dotMatchesLineSeparators]) {
             let matches = v2Regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
-            payloads.append(contentsOf: matches.compactMap { m -> FilePayload? in
+            let v2Files = matches.compactMap { m -> FilePayload? in
                 guard let rPath = Range(m.range(at: 1), in: text),
                       let rContent = Range(m.range(at: 2), in: text) else { return nil }
                 return FilePayload(path: String(text[rPath]), content: String(text[rContent]).trimmingCharacters(in: .newlines))
-            })
+            }
+            if !v2Files.isEmpty { print("🔹 Found \(v2Files.count) XML files") }
+            payloads.append(contentsOf: v2Files)
         }
         
         print("🔍 Universal Parser found \(payloads.count) files.")
         return payloads
     }
     
+    // Legacy function - kept but unused in processResponse
     private func sanitizeContent(_ text: String) -> String {
-        // V3协议: 移除Markdown代码块标记（如果AI在!!!标签外添加了）
         var t = text
-        // 只移除不在!!!标签内的代码块标记
         if t.contains("```") {
-            // 使用多行正则表达式模式
             t = t.replacingOccurrences(of: "(?m)^```\\w*$", with: "", options: .regularExpression)
             t = t.replacingOccurrences(of: "(?m)^```$", with: "", options: .regularExpression)
         }
         return t
     }
     
-    private func writeFile(_ path: String, _ content: String, projectRoot: String) -> Bool {
-        // 🛡️ Overwrite Risk Protection: Detect and reject Diff/partial content
-        if isDiffOrPartialContent(content) {
-            print("⚠️ Rejected: Content appears to be a Diff or partial file (contains conflict markers)")
-            print("📝 Content preview: \(content.prefix(200))...")
-            return false
-        }
-        
+    private func writeFile(_ path: String, _ content: String) -> Bool {
         let url = URL(fileURLWithPath: projectRoot).appendingPathComponent(path)
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -263,38 +243,6 @@ class GeminiLinkLogic: ObservableObject {
             print("❌ Write Failed: \(path) - \(error)")
             return false
         }
-    }
-    
-    /// 🛡️ 检测内容是否为 Diff 或部分文件（防止覆盖风险）
-    private func isDiffOrPartialContent(_ content: String) -> Bool {
-        // 检测常见的 Diff/冲突标记
-        let diffMarkers = [
-            "<<<<<<< SEARCH",
-            "<<<<<<<",
-            "=======",
-            ">>>>>>>",
-            "--- a/",
-            "+++ b/",
-            "@@ -",
-            "diff --git"
-        ]
-        
-        for marker in diffMarkers {
-            if content.contains(marker) {
-                return true
-            }
-        }
-        
-        // 检测内容是否异常短（可能是片段而非完整文件）
-        // 如果内容少于 50 字符且包含多行，可能是片段
-        let lines = content.components(separatedBy: .newlines)
-        if content.count < 50 && lines.count > 3 {
-            // 可能是代码片段，但需要更严格的判断
-            // 这里只记录警告，不直接拒绝（因为有些小文件确实很短）
-            print("⚠️ Warning: Content is very short (\(content.count) chars), may be partial")
-        }
-        
-        return false
     }
     
     /// 本地预验证: 检查Swift文件语法
