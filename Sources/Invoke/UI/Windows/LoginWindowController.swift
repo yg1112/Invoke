@@ -12,9 +12,9 @@ class LoginWindowController: NSWindowController, WKNavigationDelegate, NSWindowD
     private var webView: WKWebView!
     private var hasTriggeredSuccess = false
     
-    // 使用 StackOverflow 作为低风控跳板
-    // 流程：在 SO 登录 Google -> 获得全局 Google Session -> 跳转 Gemini
-    private let loginEntryURL = URL(string: "https://stackoverflow.com/users/login?ssrc=head&returnurl=https%3a%2f%2fstackoverflow.com%2f")!
+    // 直接导航到 Google 登录，然后跳转到 Gemini
+    // 流程：Google 登录 -> 直接跳转 Gemini
+    private let loginEntryURL = URL(string: "https://accounts.google.com/ServiceLogin?continue=https://gemini.google.com/app")!
     
     init() {
         let panel = LoginPanel(
@@ -95,7 +95,7 @@ class LoginWindowController: NSWindowController, WKNavigationDelegate, NSWindowD
     }
     
     private func startLoginFlow() {
-        // 加载 StackOverflow 登录页 (点击 Log in with Google)
+        // 直接加载 Google 登录页面，登录后自动跳转到 Gemini
         webView.load(URLRequest(url: loginEntryURL))
     }
     
@@ -109,16 +109,7 @@ class LoginWindowController: NSWindowController, WKNavigationDelegate, NSWindowD
         
         print("🔗 Navigating: \(urlStr)")
         
-        // 1. 成功检测：如果跳转回了 StackOverflow 首页 (说明 Google 登录已完成)
-        if urlStr == "https://stackoverflow.com/" || urlStr.contains("stackoverflow.com/users/signup") {
-            print("✅ StackOverflow Login Success! Redirecting to Gemini...")
-            decisionHandler(.cancel)
-            // 带着热乎的 Google Cookie 跳转到 Gemini
-            webView.load(URLRequest(url: URL(string: "https://gemini.google.com/app")!))
-            return
-        }
-        
-        // 2. 最终目标检测：到达 Gemini
+        // 1. 最终目标检测：到达 Gemini（登录成功后 Google 会自动跳转）
         if urlStr.contains("gemini.google.com/app") && !urlStr.contains("accounts.google") {
             decisionHandler(.cancel)
             DispatchQueue.main.async { [weak self] in
@@ -151,6 +142,4 @@ class LoginWindowController: NSWindowController, WKNavigationDelegate, NSWindowD
     }
 }
 
-extension Notification.Name {
-    static let loginSuccess = Notification.Name("LoginSuccess")
-}
+// Notification name moved to BrowserWindow.swift for consistency

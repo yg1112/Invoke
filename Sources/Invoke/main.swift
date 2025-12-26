@@ -15,6 +15,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // 🚀 Fetch is ready!
         setupMenuBarIcon()
+        setupMenuBar()
         
         // 启动本地 API 服务器 (供 Aider CLI 连接)
         LocalAPIServer.shared.start()
@@ -32,6 +33,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             setupFloatingPanel()
         }
+    }
+    
+    private func setupMenuBar() {
+        let mainMenu = NSMenu()
+        
+        // App Menu
+        let appMenuItem = NSMenuItem()
+        mainMenu.addItem(appMenuItem)
+        let appMenu = NSMenu()
+        appMenuItem.submenu = appMenu
+        appMenu.addItem(NSMenuItem(title: "About Fetch", action: nil, keyEquivalent: ""))
+        appMenu.addItem(NSMenuItem.separator())
+        appMenu.addItem(NSMenuItem(title: "Quit Fetch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+        
+        // Edit Menu (关键：启用 Cmd+V)
+        let editMenuItem = NSMenuItem()
+        mainMenu.addItem(editMenuItem)
+        let editMenu = NSMenu(title: "Edit")
+        editMenuItem.submenu = editMenu
+        
+        editMenu.addItem(NSMenuItem(title: "Undo", action: Selector("undo:"), keyEquivalent: "z"))
+        
+        let redoItem = NSMenuItem(title: "Redo", action: Selector("redo:"), keyEquivalent: "Z")
+        redoItem.keyEquivalentModifierMask = NSEvent.ModifierFlags([.command, .shift])
+        editMenu.addItem(redoItem)
+        
+        editMenu.addItem(NSMenuItem.separator())
+        
+        editMenu.addItem(NSMenuItem(title: "Cut", action: Selector("cut:"), keyEquivalent: "x"))
+        editMenu.addItem(NSMenuItem(title: "Copy", action: Selector("copy:"), keyEquivalent: "c"))
+        editMenu.addItem(NSMenuItem(title: "Paste", action: Selector("paste:"), keyEquivalent: "v"))
+        editMenu.addItem(NSMenuItem(title: "Select All", action: Selector("selectAll:"), keyEquivalent: "a"))
+        
+        NSApp.mainMenu = mainMenu
     }
     
     // MARK: - URL Scheme Handler (Magic Bookmark)
@@ -56,19 +91,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         
         print("🍪 Cookie received, injecting...")
         
-        // 注入 Cookie
-        GeminiWebManager.shared.injectRawCookies(cookieValue) {
-            print("✅ Magic login completed!")
-            
-            // 发送登录成功通知
-            DispatchQueue.main.async {
-                NotificationCenter.default.post(name: NSNotification.Name("MagicLoginSuccess"), object: nil)
+        // 注入 Cookie (需要在 MainActor 上调用)
+        Task { @MainActor in
+            GeminiWebManager.shared.injectRawCookies(cookieValue) {
+                print("✅ Magic login completed!")
                 
-                // 激活 App 窗口
-                NSApp.activate(ignoringOtherApps: true)
-                
-                // 关闭登录窗口
-                BrowserWindowController.shared.hideWindow()
+                // 发送登录成功通知
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: NSNotification.Name("MagicLoginSuccess"), object: nil)
+                    
+                    // 激活 App 窗口
+                    NSApp.activate(ignoringOtherApps: true)
+                    
+                    // 关闭登录窗口
+                    BrowserWindowController.shared.hideWindow()
+                }
             }
         }
     }

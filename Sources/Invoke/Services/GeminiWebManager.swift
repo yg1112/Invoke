@@ -29,6 +29,7 @@ class InteractiveWebView: WKWebView {
 
 /// Native Gemini Bridge - 替代 Chrome Extension + proxy.py
 /// 使用 WKWebView 直接与 gemini.google.com 通信
+@MainActor
 class GeminiWebManager: NSObject, ObservableObject {
     static let shared = GeminiWebManager()
     
@@ -117,6 +118,7 @@ class GeminiWebManager: NSObject, ObservableObject {
     // MARK: - Public API
     
     /// 发送 Prompt 给 Gemini，异步返回响应
+    /// 使用 MagicPaster (剪贴板+Cmd+V+Enter) 替代JS注入，更稳定可靠
     func sendPrompt(_ text: String, model: String = "default", completion: @escaping (String) -> Void) {
         guard isReady && isLoggedIn else {
             completion("Error: Gemini not ready or not logged in")
@@ -127,61 +129,77 @@ class GeminiWebManager: NSObject, ObservableObject {
         pendingPromptId = UUID().uuidString
         responseCallback = completion
         
-        // 先执行清理脚本，关闭干扰弹窗
+        // 统一输入流: 使用剪贴板 + 模拟键盘，不依赖DOM选择器
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            // 1. 将Prompt写入剪贴板
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            
+            // 2. 聚焦浏览器窗口
+            if let window = self.webView.window {
+                window.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+            }
+            
+            // 3. 等待窗口激活后，使用MagicPaster发送
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                // 先清理弹窗（如果存在）
+                self.cleanupPopups { [weak self] in
+                    guard let self = self else { return }
+                    
+                    // 等待输入框聚焦
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        // 使用MagicPaster模拟 Cmd+V + Enter
+                        MagicPaster.shared.pasteToBrowser()
+                        
+                        // 等待响应（通过JS监听）
+                        self.waitForResponse(id: self.pendingPromptId!)
+                    }
+                }
+            }
+        }
+    }
+    
+    /// 清理干扰弹窗（通过JS）
+    private func cleanupPopups(completion: @escaping () -> Void) {
         let cleanupScript = """
         (function() {
-            // 1. 尝试点击 "Close", "No thanks", "Maybe later" 等按钮
             const buttons = Array.from(document.querySelectorAll('button'));
             const dismissBtns = buttons.filter(b => {
-                const text = b.innerText || '';
+                const text = (b.innerText || '').trim();
                 const ariaLabel = b.getAttribute('aria-label') || '';
-                return text.match(/Close|No thanks|Maybe later|Got it|Dismiss/i) || 
+                return text.match(/Close|No thanks|Maybe later|Got it|Dismiss|I agree|Accept/i) || 
                        ariaLabel.match(/Close|Dismiss/i);
             });
             dismissBtns.forEach(b => {
                 try { b.click(); } catch(e) {}
             });
-            
-            // 2. 返回当前状态诊断
-            return {
-                url: window.location.href,
-                hasInput: !!(document.querySelector('div[contenteditable="true"]') || 
-                            document.querySelector('rich-textarea') ||
-                            document.querySelector('div[role="textbox"]')),
-                bodyLength: document.body ? document.body.innerText.length : 0,
-                htmlPreview: document.body ? document.body.innerHTML.substring(0, 500) : ''
-            };
         })();
         """
         
-        webView.evaluateJavaScript(cleanupScript) { [weak self] result, error in
-            guard let self = self else { return }
-            
-            if let error = error {
-                print("⚠️ Cleanup script error: \(error.localizedDescription)")
-            } else if let diagnostic = result as? [String: Any] {
-                print("🔍 Page diagnostic: URL=\(diagnostic["url"] ?? "unknown"), hasInput=\(diagnostic["hasInput"] ?? false)")
-                if let htmlPreview = diagnostic["htmlPreview"] as? String, !htmlPreview.isEmpty {
-                    print("📄 HTML preview (first 500 chars): \(htmlPreview)")
-                }
+        webView.evaluateJavaScript(cleanupScript) { _, _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                completion()
             }
-            
-            // 继续发送 prompt
-            let escapedText = text
-                .replacingOccurrences(of: "\\", with: "\\\\")
-                .replacingOccurrences(of: "\"", with: "\\\"")
-                .replacingOccurrences(of: "\n", with: "\\n")
-                .replacingOccurrences(of: "\r", with: "")
-            
-            let js = """
-            window.__fetchBridge.sendPrompt("\(escapedText)", "\(model)", "\(self.pendingPromptId!)");
-            """
-            
-            self.webView.evaluateJavaScript(js) { _, error in
+        }
+    }
+    
+    /// 等待Gemini响应完成
+    private func waitForResponse(id: String) {
+        let waitScript = """
+        window.__fetchBridge.waitForResponse("\(id)");
+        """
+        
+        webView.evaluateJavaScript(waitScript) { _, error in
                 if let error = error {
-                    print("❌ JS Error: \(error)")
-                    self.isProcessing = false
-                    completion("Error: \(error.localizedDescription)")
+                print("❌ Wait script error: \(error)")
+                DispatchQueue.main.async { [weak self] in
+                    self?.isProcessing = false
+                    self?.responseCallback?("Error: \(error.localizedDescription)")
+                    self?.responseCallback = nil
                 }
             }
         }
@@ -239,10 +257,45 @@ class GeminiWebManager: NSObject, ObservableObject {
     /// 检查登录状态
     func checkLoginStatus() {
         let js = "window.__fetchBridge ? window.__fetchBridge.checkLogin() : false;"
-        webView.evaluateJavaScript(js) { [weak self] result, _ in
+        webView.evaluateJavaScript(js) { [weak self] result, error in
             DispatchQueue.main.async {
-                self?.isLoggedIn = (result as? Bool) ?? false
-                self?.connectionStatus = self?.isLoggedIn == true ? "🟢 Connected" : "🔴 Need Login"
+                if let error = error {
+                    print("⚠️ Login check error: \(error.localizedDescription)")
+                }
+                
+                // 处理返回结果（可能是 Bool 或包含调试信息的对象）
+                if let loggedIn = result as? Bool {
+                    self?.isLoggedIn = loggedIn
+                    self?.connectionStatus = loggedIn ? "🟢 Connected" : "🔴 Need Login"
+                } else if let resultDict = result as? [String: Any] {
+                    // 如果返回了调试信息
+                    let loggedIn = resultDict["loggedIn"] as? Bool ?? false
+                    self?.isLoggedIn = loggedIn
+                    self?.connectionStatus = loggedIn ? "🟢 Connected" : "🔴 Need Login"
+                    
+                    if let debug = resultDict["debug"] as? [String: Any] {
+                        print("🔍 Login Debug - URL: \(debug["url"] ?? "unknown"), HasInputBox: \(debug["hasInputBox"] ?? false)")
+                    }
+                } else {
+                    // 如果 JS 返回了其他格式，尝试从消息处理器获取
+                    print("⚠️ Unexpected login check result type")
+                }
+                
+                // 额外检查：如果 URL 包含 gemini.google.com，强制设为已登录
+                self?.webView.evaluateJavaScript("window.location.href") { urlResult, _ in
+                    if let urlString = urlResult as? String,
+                       urlString.contains("gemini.google.com") &&
+                       !urlString.contains("accounts.google.com") &&
+                       !urlString.contains("signin") {
+                        DispatchQueue.main.async {
+                            if let self = self, !self.isLoggedIn {
+                                print("🔧 Force setting loggedIn=true based on URL: \(urlString)")
+                                self.isLoggedIn = true
+                                self.connectionStatus = "🟢 Connected"
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -389,7 +442,16 @@ class GeminiWebManager: NSObject, ObservableObject {
 
 extension GeminiWebManager: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        print("✅ Page loaded: \(webView.url?.absoluteString ?? "")")
+        let urlString = webView.url?.absoluteString ?? ""
+        print("✅ Page loaded: \(urlString)")
+        
+        // 如果加载的是 Gemini 页面，立即检查登录状态
+        if urlString.contains("gemini.google.com") && !urlString.contains("accounts.google.com") {
+            print("📍 Detected Gemini page, checking login status...")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                self?.checkLoginStatus()
+            }
+        }
         
         // 等待页面完全渲染
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
@@ -429,6 +491,11 @@ extension GeminiWebManager: WKScriptMessageHandler {
             
         case "LOGIN_STATUS":
             let loggedIn = body["loggedIn"] as? Bool ?? false
+            if let debug = body["debug"] as? [String: Any] {
+                let url = debug["url"] as? String ?? "unknown"
+                let hasInputBox = debug["hasInputBox"] as? Bool ?? false
+                print("🔍 Login Status Update - URL: \(url), HasInputBox: \(hasInputBox), LoggedIn: \(loggedIn)")
+            }
             DispatchQueue.main.async { [weak self] in
                 self?.isLoggedIn = loggedIn
                 self?.connectionStatus = loggedIn ? "🟢 Connected" : "🔴 Need Login"
@@ -472,83 +539,157 @@ extension GeminiWebManager {
     })();
     """
     
-    /// 注入到 Gemini 页面的 JavaScript (移植自 content.js v7.3)
+    /// 注入到 Gemini 页面的 JavaScript (v9.0 - MagicPaster模式)
+    /// 不再使用JS逐字输入，改为监听响应
     static let injectedScript = """
     (function() {
-        console.log("🚀 Fetch Bridge v8.0 (Native) Initializing...");
+        console.log("🚀 Fetch Bridge v9.0 (MagicPaster Mode) Initializing...");
         
         // 全局桥接对象
         window.__fetchBridge = {
             pendingId: null,
             
-            // 发送 Prompt
-            sendPrompt: async function(text, model, id) {
+            // 等待响应（输入由MagicPaster完成，这里只负责监听）
+            waitForResponse: function(id) {
                 this.pendingId = id;
+                const self = this;
                 
-                try {
-                    // 模型切换 (如果需要)
-                    if (model && model !== 'default') {
-                        await this.switchModel(model);
+                let hasStarted = false;
+                let silenceTimer = null;
+                const startTime = Date.now();
+                
+                const observer = new MutationObserver(() => {
+                    const stopBtn = document.querySelector('button[aria-label*="Stop"], button[aria-label*="停止"]');
+                    
+                    if (stopBtn) {
+                        hasStarted = true;
+                        if (silenceTimer) { 
+                            clearTimeout(silenceTimer); 
+                            silenceTimer = null; 
+                        }
+                    } else if (hasStarted) {
+                        if (!silenceTimer) {
+                            silenceTimer = setTimeout(() => finish(), 1500);
+                        }
+                    } else if (Date.now() - startTime > 15000) {
+                        observer.disconnect();
+                        self.postToSwift({ 
+                            type: 'GEMINI_RESPONSE', 
+                            id: id, 
+                            content: 'Error: Timeout waiting for response' 
+                        });
                     }
+                });
+                
+                const finish = () => {
+                    observer.disconnect();
                     
-                    // 清理干扰弹窗
-                    const buttons = Array.from(document.querySelectorAll('button'));
-                    const dismissBtns = buttons.filter(b => {
-                        const text = (b.innerText || '').trim();
-                        const ariaLabel = b.getAttribute('aria-label') || '';
-                        return text.match(/Close|No thanks|Maybe later|Got it|Dismiss|I agree|Accept/i) || 
-                               ariaLabel.match(/Close|Dismiss/i);
-                    });
-                    dismissBtns.forEach(b => {
-                        try { b.click(); } catch(e) {}
-                    });
-                    await this.sleep(300);
+                    let text = "";
                     
-                    // 找到输入框（更新选择器列表）
-                    const inputArea = await this.waitForElement([
-                        'div[contenteditable="true"]',
-                        'rich-textarea',
+                    // 多重策略：尝试多种选择器
+                    const selectors = [
+                        'model-response',
+                        '[data-model-response]',
+                        '.model-response',
                         'div[role="textbox"]',
-                        'rich-textarea div p',
-                        'textarea[aria-label*="message"]'
-                    ]);
+                        '.message-content',
+                        '.text-content',
+                        'div[contenteditable="false"]'
+                    ];
                     
-                    inputArea.focus();
-                    await this.sleep(100);
-                    
-                    // 清空并输入
-                    document.execCommand('selectAll', false, null);
-                    document.execCommand('delete', false, null);
-                    await this.sleep(50);
-                    
-                    // 拟人化逐字输入
-                    for (const char of text) {
-                        document.execCommand('insertText', false, char);
-                        await this.sleep(Math.random() * 15 + 5);
+                    let lastResponse = null;
+                    for (const selector of selectors) {
+                        const elements = document.querySelectorAll(selector);
+                        if (elements.length > 0) {
+                            lastResponse = elements[elements.length - 1];
+                            console.log(`✅ Found response using selector: ${selector}`);
+                            break;
+                        }
                     }
                     
-                    await this.sleep(300);
-                    
-                    // 发送
-                    const sendBtn = document.querySelector('button[aria-label*="Send"], button[aria-label*="发送"], .send-button');
-                    if (sendBtn && !sendBtn.disabled) {
-                        sendBtn.click();
-                    } else {
-                        inputArea.dispatchEvent(new KeyboardEvent('keydown', {
-                            keyCode: 13, key: 'Enter', code: 'Enter', bubbles: true
-                        }));
+                    if (lastResponse) {
+                        // 优先查找 markdown 容器
+                        const md = lastResponse.querySelector('.markdown, [class*="markdown"], .markdown-container');
+                        if (md) {
+                            text = md.textContent || md.innerText;
+                        } else {
+                            text = lastResponse.textContent || lastResponse.innerText;
+                        }
+                        
+                        // 清理文本 (使用 JavaScript 字符串方法)
+                        text = text.replace(/Show thinking/gi, '')
+                                   .replace(/Gemini can make mistakes.*$/gim, '')
+                                   .replace(/^\\s*Thinking\\s*$/gim, '');
+                        text = text.trim();
                     }
                     
-                    // 等待响应
-                    await this.waitForResponse(id);
+                    // 如果仍然没有找到，记录调试信息
+                    if (!text || text.length === 0) {
+                        console.warn('⚠️ No response text found, collecting debug info...');
+                        
+                        // 收集页面结构摘要
+                        const debugInfo = {
+                            url: window.location.href,
+                            title: document.title,
+                            bodyClasses: document.body.className,
+                            foundElements: {}
+                        };
+                        
+                        selectors.forEach(sel => {
+                            const count = document.querySelectorAll(sel).length;
+                            if (count > 0) {
+                                debugInfo.foundElements[sel] = count;
+                            }
+                        });
+                        
+                        // 查找所有可能的文本容器
+                        const textContainers = Array.from(document.querySelectorAll('div, p, span'))
+                            .filter(el => {
+                                const txt = el.textContent || '';
+                                return txt.length > 50 && txt.length < 5000;
+                            })
+                            .slice(-3)
+                            .map(el => ({
+                                tag: el.tagName,
+                                classes: el.className,
+                                textPreview: (el.textContent || '').substring(0, 100)
+                            }));
+                        
+                        debugInfo.recentTextContainers = textContainers;
+                        console.log('🔍 Debug Info:', JSON.stringify(debugInfo, null, 2));
+                        
+                        // 尝试从最后一个文本容器提取
+                        if (textContainers.length > 0) {
+                            const lastContainer = document.querySelectorAll('div, p, span')
+                                .item(document.querySelectorAll('div, p, span').length - 1);
+                            if (lastContainer) {
+                                text = (lastContainer.textContent || '').trim();
+                                console.log('📝 Extracted text from fallback container');
+                            }
+                        }
+                    }
                     
-                } catch (e) {
-                    console.error("❌ Error:", e);
-                    this.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: 'Error: ' + e.message });
-                }
+                    self.postToSwift({ 
+                        type: 'GEMINI_RESPONSE', 
+                        id: id, 
+                        content: text || 'Error: No response detected. Check console for debug info.' 
+                    });
+                };
+                
+                observer.observe(document.body, { 
+                    childList: true, 
+                    subtree: true, 
+                    characterData: true 
+                });
+                
+                // 超时保护
+                setTimeout(() => { 
+                    observer.disconnect(); 
+                    if (hasStarted) finish(); 
+                }, 60000);
             },
             
-            // 模型切换
+            // 模型切换（保留，但不再在sendPrompt中调用）
             switchModel: async function(targetModel) {
                 const MODEL_MAP = {
                     'flash': ['Flash', 'Fast', '2.0 Flash'],
@@ -591,56 +732,45 @@ extension GeminiWebManager {
                 }
             },
             
-            // 等待响应完成
-            waitForResponse: function(id) {
-                return new Promise((resolve) => {
-                    let hasStarted = false;
-                    let silenceTimer = null;
-                    const startTime = Date.now();
-                    const self = this;
-                    
-                    const observer = new MutationObserver(() => {
-                        const stopBtn = document.querySelector('button[aria-label*="Stop"]');
-                        
-                        if (stopBtn) {
-                            hasStarted = true;
-                            if (silenceTimer) { clearTimeout(silenceTimer); silenceTimer = null; }
-                        } else if (hasStarted) {
-                            if (!silenceTimer) {
-                                silenceTimer = setTimeout(() => finish(), 1500);
-                            }
-                        } else if (Date.now() - startTime > 15000) {
-                            observer.disconnect();
-                            self.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: 'Error: Timeout' });
-                            resolve();
-                        }
-                    });
-                    
-                    const finish = () => {
-                        observer.disconnect();
-                        
-                        let text = "";
-                        const responses = document.querySelectorAll('model-response');
-                        if (responses.length > 0) {
-                            const last = responses[responses.length - 1];
-                            const md = last.querySelector('.markdown');
-                            text = md ? md.textContent : last.innerText;
-                            text = text.replace(/Show thinking/g, '').replace(/Gemini can make mistakes.*$/gim, '').trim();
-                        }
-                        
-                        self.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: text || 'Error: No response' });
-                        resolve();
-                    };
-                    
-                    observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-                    setTimeout(() => { observer.disconnect(); if (hasStarted) finish(); else resolve(); }, 60000);
-                });
-            },
-            
-            // 检查登录状态
+            // 检查登录状态（改进版：多重检测）
             checkLogin: function() {
-                const loggedIn = !document.querySelector('a[href*="accounts.google.com"]');
-                this.postToSwift({ type: 'LOGIN_STATUS', loggedIn: loggedIn });
+                const currentURL = window.location.href;
+                const pageTitle = document.title;
+                
+                // 方法1: URL 检查 - 只要在 Gemini 域名下就初步通过
+                const isOnGeminiDomain = currentURL.includes('gemini.google.com') && 
+                                        !currentURL.includes('accounts.google.com') &&
+                                        !currentURL.includes('signin');
+                
+                // 方法2: DOM 检查 - 查找 Gemini 输入框（恒定特征）
+                const hasInputBox = !!document.querySelector('div[contenteditable="true"]');
+                
+                // 方法3: 检查是否有登录链接（旧方法，作为反向验证）
+                const hasLoginLink = !!document.querySelector('a[href*="accounts.google.com"]');
+                
+                // 综合判断：在 Gemini 域名 + 有输入框 = 已登录
+                // 或者：在 Gemini 域名 + 没有登录链接 = 已登录
+                const loggedIn = isOnGeminiDomain && (hasInputBox || !hasLoginLink);
+                
+                // 调试信息
+                console.log('🔍 Login Check:', {
+                    url: currentURL,
+                    title: pageTitle,
+                    isOnGeminiDomain: isOnGeminiDomain,
+                    hasInputBox: hasInputBox,
+                    hasLoginLink: hasLoginLink,
+                    loggedIn: loggedIn
+                });
+                
+                this.postToSwift({ 
+                    type: 'LOGIN_STATUS', 
+                    loggedIn: loggedIn,
+                    debug: {
+                        url: currentURL,
+                        title: pageTitle,
+                        hasInputBox: hasInputBox
+                    }
+                });
                 return loggedIn;
             },
             

@@ -3,6 +3,7 @@ import Combine
 
 /// Bridge Service v2.0 - Native WKWebView 实现
 /// 不再需要 Python proxy，直接使用 GeminiWebManager
+@MainActor
 class BridgeService: ObservableObject {
     static let shared = BridgeService()
     

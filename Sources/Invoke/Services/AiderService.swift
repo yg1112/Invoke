@@ -2,6 +2,7 @@ import Foundation
 
 /// Aider Service v2.0 - Man-in-the-Middle 架构
 /// Fetch 充当中间人：User -> Fetch -> Gemini -> Fetch -> Aider
+@MainActor
 class AiderService: ObservableObject {
     static let shared = AiderService()
     

@@ -63,7 +63,7 @@ class BrowserWindowController: NSObject, ObservableObject {
     
     func hideWindow() {
         // 先停止所有 WebView 加载
-        if let hostingView = window?.contentView as? NSHostingView<LoginMethodsView> {
+        if window?.contentView is NSHostingView<LoginMethodsView> {
             // 窗口会在关闭时自动清理 WebView
         }
         

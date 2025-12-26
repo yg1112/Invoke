@@ -13,6 +13,8 @@ struct ChangeLog: Identifiable, Codable {
 }
 
 class GeminiLinkLogic: ObservableObject {
+    static let shared = GeminiLinkLogic()
+    
     @Published var projectRoot: String = UserDefaults.standard.string(forKey: "ProjectRoot") ?? "" {
         didSet {
             UserDefaults.standard.set(projectRoot, forKey: "ProjectRoot")
@@ -56,12 +58,10 @@ class GeminiLinkLogic: ObservableObject {
     private var lastChangeCount: Int = 0
     private var lastUserClipboard: String = ""
     
-    // 🛡️ Protocol V2 Definition
+    // 🛡️ Protocol V3 Definition - 使用!!!标记，更安全可靠
     private let magicTrigger = ">>> INVOKE"
-    // XML Tags (Split to avoid self-detection)
-    private let tagFileStart = "<FILE_CONTENT"
-    private let tagFileEnd = "</FILE_CONTENT>"
-    private let attrPath = "path=\""
+    private let tagFileStart = "!!!FILE_START!!!"
+    private let tagFileEnd = "!!!FILE_END!!!"
     
     init() {
         setupNotifications()
@@ -90,8 +90,17 @@ class GeminiLinkLogic: ObservableObject {
         isListening = true
         lastChangeCount = pasteboard.changeCount
         if let content = pasteboard.string(forType: .string) { lastUserClipboard = content }
-        timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in self?.checkClipboard() }
-        print("👂 Listening started...")
+        
+        // 确保 Timer 在主线程的 RunLoop 上运行
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.timer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: true) { [weak self] _ in
+                self?.checkClipboard()
+            }
+            // 添加到主 RunLoop 确保即使 App 在后台也能运行
+            RunLoop.main.add(self.timer!, forMode: .common)
+            print("👂 Listening started... (Timer on main RunLoop)")
+        }
     }
     
     private func checkClipboard() {
@@ -111,7 +120,7 @@ class GeminiLinkLogic: ObservableObject {
             return
         }
         
-        print("⚡️ Detected Protocol V2 Content")
+        print("⚡️ Detected >>> INVOKE trigger")
         processAllChanges(content)
     }
     
@@ -139,37 +148,76 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
-    // 🔥 Core Parser for V2 Protocol
+    // 🔥 Core Parser - 支持 Protocol V2 (XML) 和 V3 (!!!标记)
     private func parseXMLFiles(_ text: String) -> [FilePayload] {
-        // Regex: Matches <FILE_CONTENT path="path/to/file"> content </FILE_CONTENT>
-        // Uses (?s) to let . match newlines
-        let pattern = "<FILE_CONTENT\\s+path=\"([^\"]+)\"\\s*>(.*?)</FILE_CONTENT>"
+        var files: [FilePayload] = []
         
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.dotMatchesLineSeparators]) else {
-            print("❌ Regex Error")
-            return []
+        // 优先尝试 V3 格式 (!!!FILE_START!!!)
+        if text.contains(tagFileStart) {
+            let components = text.components(separatedBy: tagFileStart)
+            
+            for component in components.dropFirst() {
+                guard let endRange = component.range(of: tagFileEnd) else { continue }
+                
+                let fileBlock = String(component[..<endRange.lowerBound])
+                let lines = fileBlock.components(separatedBy: .newlines)
+                
+                guard let firstLine = lines.first?.trimmingCharacters(in: .whitespaces),
+                      !firstLine.isEmpty else { continue }
+                
+                let path = firstLine.trimmingCharacters(in: .whitespaces)
+                let content = lines.dropFirst().joined(separator: "\n").trimmingCharacters(in: .newlines)
+                
+                if !path.isEmpty && !content.isEmpty {
+                    files.append(FilePayload(path: path, content: content))
+                }
+            }
+            
+            if !files.isEmpty {
+                print("✅ Parsed \(files.count) file(s) using Protocol V3")
+                return files
+            }
         }
         
-        let matches = regex.matches(in: text, range: NSRange(text.startIndex..<text.endIndex, in: text))
-        
-        return matches.compactMap { m -> FilePayload? in
-            guard let rPath = Range(m.range(at: 1), in: text),
-                  let rContent = Range(m.range(at: 2), in: text) else { return nil }
+        // 回退到 V2 XML 格式 (<FILE_CONTENT>)
+        let xmlPattern = #"<FILE_CONTENT\s+path="([^"]+)"[^>]*>([\s\S]*?)</FILE_CONTENT>"#
+        if let regex = try? NSRegularExpression(pattern: xmlPattern, options: []) {
+            let nsText = text as NSString
+            let matches = regex.matches(in: text, options: [], range: NSRange(location: 0, length: nsText.length))
             
-            let path = String(text[rPath])
-            // Trim leading/trailing newlines from content that might be introduced by XML formatting
-            let content = String(text[rContent]).trimmingCharacters(in: .newlines)
+            for match in matches {
+                if match.numberOfRanges >= 3 {
+                    let pathRange = match.range(at: 1)
+                    let contentRange = match.range(at: 2)
+                    
+                    if pathRange.location != NSNotFound, contentRange.location != NSNotFound {
+                        let path = nsText.substring(with: pathRange)
+                        let content = nsText.substring(with: contentRange)
+                        
+                        if !path.isEmpty && !content.isEmpty {
+                            files.append(FilePayload(path: path, content: content))
+                        }
+                    }
+                }
+            }
             
-            return FilePayload(path: path, content: content)
+            if !files.isEmpty {
+                print("✅ Parsed \(files.count) file(s) using Protocol V2 (XML)")
+                return files
+            }
         }
+        
+        return files
     }
     
     private func sanitizeContent(_ text: String) -> String {
-        // Remove markdown code block markers to prevent compilation errors
+        // V3协议: 移除Markdown代码块标记（如果AI在!!!标签外添加了）
         var t = text
+        // 只移除不在!!!标签内的代码块标记
         if t.contains("```") {
-            // Simple removal of fence lines
-            t = t.replacingOccurrences(of: "^```\\w*$", with: "", options: .regularExpression)
+            // 使用多行正则表达式模式
+            t = t.replacingOccurrences(of: "(?m)^```\\w*$", with: "", options: .regularExpression)
+            t = t.replacingOccurrences(of: "(?m)^```$", with: "", options: .regularExpression)
         }
         return t
     }
@@ -178,6 +226,15 @@ class GeminiLinkLogic: ObservableObject {
         let url = URL(fileURLWithPath: projectRoot).appendingPathComponent(path)
         do {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            
+            // 本地预验证: 如果是Swift文件，先检查语法
+            if path.hasSuffix(".swift") {
+                if !validateSwiftFile(content: content, path: path) {
+                    print("⚠️ Swift validation failed for \(path), skipping write")
+                    return false
+                }
+            }
+            
             try content.write(to: url, atomically: true, encoding: .utf8)
             print("✅ Wrote: \(path)")
             return true
@@ -187,12 +244,142 @@ class GeminiLinkLogic: ObservableObject {
         }
     }
     
+    /// 本地预验证: 检查Swift文件语法
+    private func validateSwiftFile(content: String, path: String) -> Bool {
+        // 创建临时文件
+        let tempDir = FileManager.default.temporaryDirectory
+        let tempFile = tempDir.appendingPathComponent("\(UUID().uuidString).swift")
+        
+        guard (try? content.write(to: tempFile, atomically: true, encoding: .utf8)) != nil else {
+            return false
+        }
+        
+        defer {
+            try? FileManager.default.removeItem(at: tempFile)
+        }
+        
+        // 运行swiftc语法检查
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/swiftc")
+        task.arguments = ["-typecheck", tempFile.path]
+        task.standardOutput = Pipe()
+        task.standardError = Pipe()
+        
+        do {
+            try task.run()
+            task.waitUntilExit()
+            
+            if task.terminationStatus != 0 {
+                let errorPipe = task.standardError as! Pipe
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                if let errorOutput = String(data: errorData, encoding: .utf8) {
+                    print("❌ Swift validation error for \(path):")
+                    print(errorOutput)
+                }
+                return false
+            }
+            return true
+        } catch {
+            print("⚠️ Validation check failed: \(error)")
+            // 如果检查工具不可用，允许写入（降级处理）
+            return true
+        }
+    }
+    
     private func finalize(_ files: [String]) {
         DispatchQueue.main.async {
-            if files.isEmpty { self.setStatus("No valid tags found", isBusy: false); return }
-            let summary = "Update: \(files.map{URL(fileURLWithPath: $0).lastPathComponent}.joined(separator: ", "))"
-            self.setStatus("Committing...", isBusy: true)
-            self.commitAndPush(summary)
+            if files.isEmpty { 
+                self.setStatus("No valid tags found", isBusy: false)
+                return 
+            }
+            
+            // 最终验证: 运行项目编译检查
+            self.setStatus("Running build check...", isBusy: true)
+            self.validateProjectBuild { [weak self] isValid in
+                guard let self = self else { return }
+                
+                if !isValid {
+                    self.setStatus("Build failed - changes rejected", isBusy: false)
+                    // 将错误信息反馈给Gemini
+                    self.sendBuildErrorToGemini()
+                    return
+                }
+                
+                let summary = "Update: \(files.map{URL(fileURLWithPath: $0).lastPathComponent}.joined(separator: ", "))"
+                self.setStatus("Committing...", isBusy: true)
+                self.commitAndPush(summary)
+            }
+        }
+    }
+    
+    /// 验证项目编译
+    private func validateProjectBuild(completion: @escaping (Bool) -> Void) {
+        DispatchQueue.global().async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
+            task.arguments = ["build", "--quiet"]
+            task.currentDirectoryURL = URL(fileURLWithPath: self.projectRoot)
+            task.standardOutput = Pipe()
+            task.standardError = Pipe()
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                
+                if task.terminationStatus != 0 {
+                    let errorPipe = task.standardError as! Pipe
+                    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                    if let errorOutput = String(data: errorData, encoding: .utf8) {
+                        print("❌ Build failed:")
+                        print(errorOutput)
+                    }
+                    completion(false)
+                } else {
+                    completion(true)
+                }
+            } catch {
+                print("⚠️ Build check unavailable: \(error)")
+                // 如果swift build不可用，允许继续（降级处理）
+                completion(true)
+            }
+        }
+    }
+    
+    /// 将编译错误发送给Gemini修复
+    private func sendBuildErrorToGemini() {
+        DispatchQueue.global().async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/swift")
+            task.arguments = ["build"]
+            task.currentDirectoryURL = URL(fileURLWithPath: self.projectRoot)
+            task.standardOutput = Pipe()
+            task.standardError = Pipe()
+            
+            do {
+                try task.run()
+                task.waitUntilExit()
+                
+                let errorPipe = task.standardError as! Pipe
+                let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+                let errorOutput = String(data: errorData, encoding: .utf8) ?? "Build failed"
+                
+                let prompt = """
+                [Fetch Build Error]
+                Build failed with errors:
+                
+                \(errorOutput)
+                
+                Please fix the code and resubmit using !!!FILE_START!!! format, starting with >>> INVOKE.
+                """
+                
+                DispatchQueue.main.async {
+                    self.pasteboard.clearContents()
+                    self.pasteboard.setString(prompt, forType: .string)
+                    MagicPaster.shared.pasteToBrowser()
+                }
+            } catch {
+                print("⚠️ Could not capture build error: \(error)")
+            }
         }
     }
     
@@ -220,34 +407,48 @@ class GeminiLinkLogic: ObservableObject {
     
     // MARK: - User Facing
     
-    /// Generates the NEW Protocol V2 System Prompt
+    /// Generates the NEW Protocol V3 System Prompt
     func copyGemSetupGuide() {
-        let header = "[System Instruction: " + "Fetch Protocol v2]"
+        let header = "[System Instruction: Fetch Protocol v3]"
         
         let guide = """
         \(header)
         
-        You are the backend for the 'Fetch' app.
+        You are the backend logic for a local execution engine.
+        The executor is extremely strict and will CRASH if output is malformed.
         
-        ⚠️ CRITICAL RULES:
-        1. Start response with exactly: >>> INVOKE
-        2. DO NOT use Markdown code blocks (```) for file content.
-        3. Use XML tags for all code output.
+        ⚠️ CRITICAL COMPLIANCE RULES:
+        1. NO conversational filler. Do not say "Here is the code" or "I fixed it".
+        2. Output ONLY the file changes.
+        3. Start response with exactly: >>> INVOKE
+        4. Use this EXACT format for every file, no exceptions:
         
-        --- FORMAT: FULL FILE (Recommended) ---
-        <FILE_CONTENT path="Sources/Path/To/File.swift">
-        import SwiftUI
-        // Put the FULL file content here.
-        // No strict indentation needed for the tag, but content must be valid.
-        </FILE_CONTENT>
+        !!!FILE_START!!!
+        path/to/file.ext
+        [...Put the full raw file content here...]
+        !!!FILE_END!!!
         
-        --- END OF RESPONSE ---
+        5. If you use Markdown code blocks (```), ensure they are OUTSIDE the !!! tags.
+        6. Do not truncate code. The executor cannot "fill in the rest".
+        7. Each file must be complete and valid.
+        
+        --- EXAMPLE ---
         >>> INVOKE
+        !!!FILE_START!!!
+        Sources/Example.swift
+        import Foundation
+        
+        class Example {
+            func hello() {
+                print("Hello")
+            }
+        }
+        !!!FILE_END!!!
         """
         
         pasteboard.clearContents()
         pasteboard.setString(guide, forType: .string)
-        showNotification("Protocol V2 Copied", "Paste this to reset your AI session")
+        showNotification("Protocol V3 Copied", "Paste this to reset your AI session")
     }
     
     func manualApplyFromClipboard() { checkClipboard() }
@@ -263,7 +464,7 @@ class GeminiLinkLogic: ObservableObject {
             
             \(diff)
             
-            If fix needed, use <FILE_CONTENT> format and start with >>> INVOKE.
+            If fix needed, use !!!FILE_START!!! format and start with >>> INVOKE.
             """
             DispatchQueue.main.async {
                 self.setStatus("", isBusy: false)
