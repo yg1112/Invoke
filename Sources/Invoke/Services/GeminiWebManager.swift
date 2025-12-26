@@ -13,10 +13,11 @@ class InteractiveWebView: WKWebView {
     override func becomeFirstResponder() -> Bool { return true }
 }
 
-/// Native Gemini Bridge - v19.0 (Polling State Machine & Swift Watchdog)
-/// 核心修复：
-/// 1. JS 改为轮询检测文本长度变化，不再单纯依赖 Stop 按钮，解决"无反应"问题。
-/// 2. Swift 增加主动超时强制抓取 (Force Scrape)，防止队列永久堵塞。
+/// Native Gemini Bridge - v22.0 (Strict Selector & Anti-Ghost)
+/// 修复核心：
+/// 1. 移除 .message-content Fallback，杜绝抓取到用户气泡（解决"重复回复"）。
+/// 2. 优化重试逻辑，防止"第三个你好"。
+/// 3. 增加对 Aider 内部指令的静默处理。
 @MainActor
 class GeminiWebManager: NSObject, ObservableObject {
     static let shared = GeminiWebManager()
@@ -39,8 +40,6 @@ class GeminiWebManager: NSObject, ObservableObject {
     
     private var requestStream: AsyncStream<PendingRequest>.Continuation?
     private var requestTask: Task<Void, Never>?
-    
-    // 超时看门狗
     private var watchdogTimer: Timer?
     
     public static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
@@ -63,21 +62,16 @@ class GeminiWebManager: NSObject, ObservableObject {
         
         self.requestTask = Task {
             for await request in stream {
-                // 状态检查
                 if !self.isReady { try? await Task.sleep(nanoseconds: 2 * 1_000_000_000) }
                 
-                print("🚀 [Queue] Processing Request: \(request.prompt.prefix(20))...")
+                print("🚀 [Queue] Processing: \(request.prompt.prefix(15))...")
                 
-                // 执行请求
                 do {
                     let response = try await self.performActualNetworkRequest(request.prompt, model: request.model)
                     request.continuation.resume(returning: response)
                 } catch {
                     print("❌ [Queue] Failed: \(error)")
-                    // 如果是超时，尝试一次页面刷新，防止彻底死死
-                    if let err = error as? GeminiError, case .timeout = err { 
-                        await self.reloadPageAsync() 
-                    }
+                    if let err = error as? GeminiError, case .timeout = err { await self.reloadPageAsync() }
                     request.continuation.resume(throwing: error)
                 }
             }
@@ -91,7 +85,6 @@ class GeminiWebManager: NSObject, ObservableObject {
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         config.defaultWebpagePreferences.allowsContentJavaScript = true
         
-        // 注入脚本
         let userScript = WKUserScript(source: Self.injectedScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(userScript)
         
@@ -103,13 +96,13 @@ class GeminiWebManager: NSObject, ObservableObject {
         webView.customUserAgent = Self.userAgent
         webView.navigationDelegate = self
         
-        // 🚨 DEBUG WINDOW (保持开启，方便你观察)
+        // 🚨 保持调试窗口开启，方便你确认"幽灵消息"
         debugWindow = NSWindow(
-            contentRect: NSRect(x: 50, y: 50, width: 1000, height: 800),
+            contentRect: NSRect(x: 50, y: 50, width: 1100, height: 850),
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false
         )
-        debugWindow?.title = "Fetch Debugger (v19 Polling)"
+        debugWindow?.title = "Fetch Debugger (v22 Strict)"
         debugWindow?.contentView = webView
         debugWindow?.makeKeyAndOrderFront(nil)
         debugWindow?.level = .floating 
@@ -144,11 +137,9 @@ class GeminiWebManager: NSObject, ObservableObject {
                 self.isProcessing = true
                 let promptId = UUID().uuidString
                 
-                // 1. 清理旧的回调和计时器
                 self.watchdogTimer?.invalidate()
                 self.responseCallback = nil
                 
-                // 2. 设置新的回调
                 self.responseCallback = { response in
                     self.watchdogTimer?.invalidate()
                     self.isProcessing = false
@@ -160,25 +151,23 @@ class GeminiWebManager: NSObject, ObservableObject {
                     }
                 }
                 
-                // 3. 启动 Swift 端看门狗 (30秒强制抓取，60秒彻底超时)
-                self.watchdogTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: false) { [weak self] _ in
-                    print("⏰ [Watchdog] 30s elapsed. Forcing scrape...")
+                // 延长超时到 50s，因为 Aider 可能会先发一条幽灵消息
+                self.watchdogTimer = Timer.scheduledTimer(withTimeInterval: 50.0, repeats: false) { [weak self] _ in
+                    print("⏰ Timeout. Force scrape...")
                     self?.forceScrape(id: promptId)
                 }
                 
-                // 4. 发送 JS 指令
                 let escapedText = text.replacingOccurrences(of: "\\", with: "\\\\")
                                       .replacingOccurrences(of: "\"", with: "\\\"")
                                       .replacingOccurrences(of: "\n", with: "\\n")
                 
-                let js = "window.__fetchBridge.sendPrompt(\"\(escapedText)\", \"\(promptId)\");"
+                let js = "window.__fetchBridge.sendPromptStrict(\"\(escapedText)\", \"\(promptId)\");"
                 self.webView.evaluateJavaScript(js) { _, _ in }
             }
         }
     }
     
     private func forceScrape(id: String) {
-        // 强制 JS 立即返回当前它能找到的最好的文本
         let js = "window.__fetchBridge.forceFinish('\(id)');"
         webView.evaluateJavaScript(js, completionHandler: nil)
     }
@@ -206,7 +195,7 @@ class GeminiWebManager: NSObject, ObservableObject {
     
     // MARK: - Cookie / Helper
     private static let cookieStorageKey = "FetchGeminiCookies"
-    func injectRawCookies(_ c: String, completion: @escaping () -> Void) { /* Placeholder */ }
+    func injectRawCookies(_ c: String, completion: @escaping () -> Void) { /* ... */ }
     
     func restoreCookiesFromStorage(completion: @escaping () -> Void) {
         guard let saved = UserDefaults.standard.array(forKey: Self.cookieStorageKey) as? [[String: Any]] else { completion(); return }
@@ -252,10 +241,9 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
         case "GEMINI_RESPONSE":
             let content = body["content"] as? String ?? ""
             DispatchQueue.main.async { [weak self] in
-                // 只有当有回调等待时才处理，防止多次触发
                 if let callback = self?.responseCallback {
                     callback(content.isEmpty ? "Error: Empty response" : content)
-                    self?.responseCallback = nil // 消费掉回调
+                    self?.responseCallback = nil
                     
                     if !content.isEmpty && !content.hasPrefix("Error:") { 
                         GeminiLinkLogic.shared.processResponse(content) 
@@ -270,7 +258,7 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
     }
 }
 
-// MARK: - Injected Scripts (V19)
+// MARK: - Injected Scripts (V22 - The Silencer)
 extension GeminiWebManager {
     static let fingerprintMaskScript = """
     (function() {
@@ -281,133 +269,114 @@ extension GeminiWebManager {
     
     static let injectedScript = """
     (function() {
-        console.log("🚀 Bridge v19 (Polling Machine) Initializing...");
+        console.log("🚀 Bridge v22 (Strict) Initializing...");
         
         window.__fetchBridge = {
             log: function(msg) { this.postToSwift({ type: 'LOG', message: msg }); },
 
-            sendPrompt: function(text, id) {
-                this.log("Step 1: sendPrompt: " + text.substring(0, 10) + "...");
+            sendPromptStrict: function(text, id) {
+                this.log("Step 1: Sending... " + text.substring(0, 10));
                 this.lastSentText = text.trim();
+                
+                // 严格模式：只数 role="model" 的气泡
+                this.initialModelCount = document.querySelectorAll('div[data-message-author-role="model"]').length;
                 
                 const input = document.querySelector('div[contenteditable="true"]');
                 if (!input) {
-                    this.log("❌ Input not found");
+                    this.log("❌ Input missing");
                     this.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: "Error: Input box not found." });
                     return;
                 }
                 
+                // 1. 写入 (Deep Write)
                 input.focus();
                 document.execCommand('selectAll', false, null);
                 document.execCommand('delete', false, null);
-                document.execCommand('insertText', false, text);
+                input.innerText = text; // 暴力写入
+                input.dispatchEvent(new Event('input', { bubbles: true }));
                 
+                // 2. 点击发送 (不重试，防止发两条)
                 setTimeout(() => {
                     const sendBtn = document.querySelector('button[aria-label*="Send"], button[class*="send-button"]');
-                    if (sendBtn) { sendBtn.click(); } 
-                    else { 
+                    if (sendBtn) {
+                        sendBtn.click();
+                        this.log("👆 Clicked Send");
+                    } else {
                         const enter = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, keyCode: 13, key: 'Enter' });
                         input.dispatchEvent(enter);
+                        this.log("⌨️ Hit Enter");
                     }
                     this.startPolling(id);
-                }, 500);
+                }, 600);
             },
             
-            // 🔄 核心：轮询状态机
             startPolling: function(id) {
                 const self = this;
                 if (this.pollingTimer) clearInterval(this.pollingTimer);
+                this.log("Step 2: Polling for new Model bubble...");
                 
-                this.log("Step 2: Start Polling for response...");
-                
-                let lastTextLength = 0;
-                let stableCount = 0; // 连续稳定次数
-                let hasStarted = false;
-                let startTime = Date.now();
+                let stableCount = 0;
+                let lastTextLen = 0;
+                const startTime = Date.now();
                 
                 this.pollingTimer = setInterval(() => {
-                    // 1. 检查是否超时 (45s)
-                    if (Date.now() - startTime > 45000) {
+                    if (Date.now() - startTime > 48000) {
                         self.finish(id, "timeout");
                         return;
                     }
                     
-                    // 2. 尝试获取当前的最新回复文本
-                    const currentText = self.extractText();
-                    const currentLen = currentText.length;
+                    const modelBubbles = document.querySelectorAll('div[data-message-author-role="model"]');
+                    const currentCount = modelBubbles.length;
                     
-                    // 3. 判断状态
-                    if (currentLen > 0 && currentLen > lastTextLength) {
-                        // 文本正在增长...
-                        if (!hasStarted) {
-                            self.log("🌊 Detected stream start (Len: " + currentLen + ")");
-                            hasStarted = true;
-                        }
-                        lastTextLength = currentLen;
-                        stableCount = 0; // 重置稳定计数器
-                    } 
-                    else if (hasStarted && currentLen > 0 && currentLen === lastTextLength) {
-                        // 文本长度没变
-                        stableCount++;
-                        // self.log("Waiting for stability... " + stableCount + "/4");
+                    // 只有当 AI 气泡数量增加时，才认为是回复
+                    if (currentCount > self.initialModelCount) {
+                        const lastBubble = modelBubbles[currentCount - 1];
+                        const text = lastBubble.innerText.trim();
                         
-                        // 连续 4 次检查 (约 2 秒) 没变化，且没有 Stop 按钮，认为结束
-                        const stopBtn = document.querySelector('button[aria-label*="Stop"], button[aria-label*="停止"]');
-                        if (!stopBtn && stableCount >= 4) {
-                            self.finish(id, "completed");
+                        // 垃圾过滤 (Anti-Ghost)
+                        if (text.length < 1) return;
+                        if (text === "Thinking...") return; // 忽略 Thinking 状态
+                        
+                        // 稳定性检查
+                        if (text.length === lastTextLen) {
+                            stableCount++;
+                            if (stableCount > 3) { // 1.5s 稳定
+                                self.finish(id, "completed");
+                            }
+                        } else {
+                            stableCount = 0;
+                            lastTextLen = text.length;
                         }
                     }
-                    else if (!hasStarted) {
-                        // 还没开始，检查是否有 Stop 按钮作为辅助判断
-                        const stopBtn = document.querySelector('button[aria-label*="Stop"], button[aria-label*="停止"]');
-                        if (stopBtn) {
-                             self.log("🌊 Detected stream start via Button");
-                             hasStarted = true;
-                        }
-                    }
-                    
-                }, 500); // 每 500ms 检查一次
+                }, 500);
             },
             
             finish: function(id, reason) {
-                if (this.pollingTimer) {
-                    clearInterval(this.pollingTimer);
-                    this.pollingTimer = null;
-                }
-                this.log("Step 3: Finishing (" + reason + ")");
+                if (this.pollingTimer) { clearInterval(this.pollingTimer); this.pollingTimer = null; }
+                this.log("Step 3: Finishing via " + reason);
                 
-                let text = this.extractText();
-                if (!text) text = this.extractFallback();
-                
+                const text = this.extractStrict();
                 this.postToSwift({ type: 'GEMINI_RESPONSE', id: id, content: text });
             },
             
             forceFinish: function(id) {
-                this.log("⚠️ FORCE SCRAPE TRIGGERED BY SWIFT");
                 this.finish(id, "force_scrape");
             },
             
-            extractText: function() {
-                // 暴力查找最新的一条非用户消息
-                const candidates = document.querySelectorAll('.message-content, .model-response, div[data-message-author-role="model"], p');
-                for (let i = candidates.length - 1; i >= 0; i--) {
-                    const t = candidates[i].innerText.trim();
-                    if (t.length < 5) continue;
-                    if (this.lastSentText && t === this.lastSentText) continue; // 防复读
-                    if (t.includes('Show drafts')) continue;
-                    return t; // 找到倒数第一个符合条件的，直接返回
+            extractStrict: function() {
+                // 严禁 Fallback！只抓取 role="model"
+                const modelBubbles = document.querySelectorAll('div[data-message-author-role="model"]');
+                if (modelBubbles.length === 0) return "Error: No model response found (Strict Mode)";
+                
+                // 返回最后一个
+                const t = modelBubbles[modelBubbles.length - 1].innerText.trim();
+                
+                // 再次检查是不是把用户的话当成 Model 了 (防止 Google DOM 变动导致 role 错乱)
+                if (this.lastSentText && t === this.lastSentText) {
+                    return "Error: Echo detected (Scraper grabbed user text)";
                 }
-                return "";
-            },
-            
-            extractFallback: function() {
-                const full = document.body.innerText;
-                const snippet = full.slice(-3000);
-                if (this.lastSentText) {
-                    const parts = snippet.split(this.lastSentText);
-                    if (parts.length > 1) return parts[parts.length - 1].trim();
-                }
-                return snippet;
+                
+                return t;
             },
             
             checkLogin: function() {
