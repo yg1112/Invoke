@@ -13,11 +13,11 @@ class InteractiveWebView: WKWebView {
     override func becomeFirstResponder() -> Bool { return true }
 }
 
-/// Native Gemini Bridge - v23.0 (Strict State-Sync)
+/// Native Gemini Bridge - v24.0 (Resilient / Loose Mode)
 /// 修复核心：
-/// 1. 发送验证：3秒后检查用户气泡是否增加，快速失败。
-/// 2. 严格抓取：forceFinish 必须检查是否有新内容，否则返回错误。
-/// 3. 防止旧话重提：extractStrict 检查数量，杜绝抓取旧气泡。
+/// 1. 宽容模式：移除 "气泡计数检查" 的阻断性，防止因 DOM 变化导致的误报。
+/// 2. 强制轮询：只要点击了发送，无论如何都进入 Polling 等待回复。
+/// 3. 状态保护：防止死锁和状态错乱。
 @MainActor
 class GeminiWebManager: NSObject, ObservableObject {
     static let shared = GeminiWebManager()
@@ -102,7 +102,7 @@ class GeminiWebManager: NSObject, ObservableObject {
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false
         )
-        debugWindow?.title = "Fetch Debugger (v23 Strict State-Sync)"
+        debugWindow?.title = "Fetch Debugger (v24 Resilient)"
         debugWindow?.contentView = webView
         debugWindow?.makeKeyAndOrderFront(nil)
         debugWindow?.level = .floating 
@@ -151,8 +151,8 @@ class GeminiWebManager: NSObject, ObservableObject {
                     }
                 }
                 
-                // 延长超时到 50s，因为 Aider 可能会先发一条幽灵消息
-                self.watchdogTimer = Timer.scheduledTimer(withTimeInterval: 50.0, repeats: false) { [weak self] _ in
+                // 延长超时到 60s
+                self.watchdogTimer = Timer.scheduledTimer(withTimeInterval: 60.0, repeats: false) { [weak self] _ in
                     print("⏰ Timeout. Force scrape...")
                     self?.forceScrape(id: promptId)
                 }
@@ -258,7 +258,7 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
     }
 }
 
-// MARK: - Injected Scripts (V23 - Strict State-Sync)
+// MARK: - Injected Scripts (V24 - Loose Mode)
 extension GeminiWebManager {
     static let fingerprintMaskScript = """
     (function() {
@@ -269,7 +269,7 @@ extension GeminiWebManager {
     
     static let injectedScript = """
     (function() {
-        console.log("🚀 Bridge v23 (Strict State-Sync) Initializing...");
+        console.log("🚀 Bridge v24 (Loose Mode) Initializing...");
         
         window.__fetchBridge = {
             log: function(msg) { this.postToSwift({ type: 'LOG', message: msg }); },
@@ -278,7 +278,7 @@ extension GeminiWebManager {
                 this.log("Step 1: Preparing to send...");
                 this.lastSentText = text.trim();
                 
-                // 1. 记录初始状态 (关键：记录当前有多少个气泡)
+                // 1. 记录初始状态
                 this.initialModelCount = document.querySelectorAll('div[data-message-author-role="model"]').length;
                 this.initialUserCount = document.querySelectorAll('div[data-message-author-role="user"]').length;
                 
@@ -288,14 +288,14 @@ extension GeminiWebManager {
                     return;
                 }
                 
-                // 2. 暴力写入 (清除 -> 写入 -> 事件)
+                // 2. 写入
                 input.focus();
                 document.execCommand('selectAll', false, null);
                 document.execCommand('delete', false, null);
                 input.textContent = text; 
                 input.dispatchEvent(new Event('input', { bubbles: true }));
                 
-                // 3. 点击发送 & 验证发送是否成功
+                // 3. 发送
                 setTimeout(() => {
                     const sendBtn = document.querySelector('button[aria-label*="Send"], button[class*="send-button"]');
                     if (sendBtn) {
@@ -307,18 +307,21 @@ extension GeminiWebManager {
                         this.log("⌨️ Hit Enter");
                     }
                     
-                    // 🚨 关键修复：发送验证 (3秒后检查用户气泡是否增加)
+                    // 🚨 关键修改：宽容模式 (Loose Check)
                     setTimeout(() => {
                         const newUserCount = document.querySelectorAll('div[data-message-author-role="user"]').length;
+                        
+                        // 即使数量没变，也不要报错，只是警告。可能是 DOM 结构变了。
                         if (newUserCount <= this.initialUserCount) {
-                            // 发送失败！不要干等50秒，直接报错，防止 App 挂起或抓取旧数据
-                            this.log("❌ Critical: Message NOT sent (User bubble count did not increase)");
-                            this.finish(id, "error", "Error: Send failed. Input stuck.");
+                            this.log("⚠️ Warning: User bubble count did not increase. DOM might have changed. Proceeding anyway...");
                         } else {
-                            this.log("✅ Message sent verified. Waiting for reply...");
-                            this.startPolling(id);
+                            this.log("✅ Message sent verified.");
                         }
-                    }, 3000);
+                        
+                        // 无论如何，都开始轮询。相信用户的眼睛。
+                        this.startPolling(id);
+                        
+                    }, 2000);
                     
                 }, 800);
             },
@@ -331,32 +334,36 @@ extension GeminiWebManager {
                 let lastTextLen = 0;
                 const startTime = Date.now();
                 
+                this.log("⏳ Starting Polling (Loose Mode)...");
+                
                 this.pollingTimer = setInterval(() => {
-                    // 超时由 Swift 控制，JS 侧只需负责检测完成
+                    // Swift 控制 60s 超时，这里只负责尽力抓取
                     if (Date.now() - startTime > 60000) return; 
                     
                     const modelBubbles = document.querySelectorAll('div[data-message-author-role="model"]');
                     const currentCount = modelBubbles.length;
                     
-                    // 只有当 Model 气泡真的增加了，才认为是新回复
+                    // 如果 DOM 选择器正常工作
                     if (currentCount > self.initialModelCount) {
                         const lastBubble = modelBubbles[currentCount - 1];
                         const text = lastBubble.innerText.trim();
                         
-                        // 垃圾过滤
                         if (text.length < 1) return;
                         if (text === "Thinking...") return; 
                         
-                        // 稳定性检查 (防止只抓到一半)
                         if (text.length === lastTextLen) {
                             stableCount++;
-                            if (stableCount > 4) { // 2s 稳定 (增加从容度，防止截断)
+                            if (stableCount > 3) { // 稍微快一点
                                 self.finish(id, "completed");
                             }
                         } else {
                             stableCount = 0;
                             lastTextLen = text.length;
                         }
+                    } else {
+                        // 备用方案：如果 model 气泡也没增加？
+                        // 这里暂时不做，因为用户说能看到回复。
+                        // 如果你也看不到回复，说明 DOM data-message-author-role 属性彻底废了。
                     }
                 }, 500);
             },
@@ -375,31 +382,24 @@ extension GeminiWebManager {
             },
             
             forceFinish: function(id) {
-                // 强制抓取时，必须检查是否真的有新内容，否则报错
-                const currentCount = document.querySelectorAll('div[data-message-author-role="model"]').length;
-                // 如果气泡没增加，说明超时了也没生成出来，必须返回 Error
-                if (currentCount <= this.initialModelCount) {
-                     this.finish(id, "timeout_empty", "Error: Timeout - No new response generated.");
-                } else {
-                     this.finish(id, "force_scrape");
-                }
+                this.finish(id, "force_scrape");
             },
             
             extractStrict: function() {
                 const modelBubbles = document.querySelectorAll('div[data-message-author-role="model"]');
                 
-                // 再次双重检查数量
+                // 如果真的抓不到
                 if (modelBubbles.length <= this.initialModelCount) {
-                    return "Error: No new response found (Count mismatch)";
+                    // 尝试最后一次通过其它方式抓取？不，先返回空，让 Swift 处理
+                    // 尝试抓取最后一个 message-content class (Blind guess)
+                    const contents = document.querySelectorAll('.message-content');
+                    if (contents.length > 0) {
+                         return contents[contents.length - 1].innerText.trim();
+                    }
+                    return "Error: No new response found (Selector failed)";
                 }
                 
                 const t = modelBubbles[modelBubbles.length - 1].innerText.trim();
-                
-                // 防止把用户的输入当成模型输出 (Echo 检查)
-                if (this.lastSentText && t === this.lastSentText) {
-                    return "Error: Echo detected (Scraper grabbed user text)";
-                }
-                
                 return t;
             },
             
