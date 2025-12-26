@@ -482,6 +482,12 @@ extension GeminiWebManager: WKScriptMessageHandler {
             
             print("📥 Response received (id: \(id), length: \(content.count))")
             
+            // ⚡️ 关键缝合：将响应同时交给 LinkLogic 处理文件写入
+            if !content.isEmpty {
+                print("⚡️ Forwarding API response to GeminiLinkLogic...")
+                GeminiLinkLogic.shared.processResponse(content)
+            }
+            
             DispatchQueue.main.async { [weak self] in
                 self?.isProcessing = false
                 self?.lastResponse = content

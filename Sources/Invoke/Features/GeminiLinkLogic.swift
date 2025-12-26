@@ -120,14 +120,14 @@ class GeminiLinkLogic: ObservableObject {
             print("✅ Detected Trigger '>>> INVOKE'")
             print("📄 Raw Content Snippet: \(content.prefix(100))...")
             print("⚡️ Detected >>> INVOKE trigger")
-            processAllChanges(content)
+            processResponse(content)
         } else {
             // Only backup user clipboard if it's NOT code intended for us
             if !content.contains(tagFileStart) { lastUserClipboard = content }
         }
     }
     
-    private func processAllChanges(_ rawText: String) {
+    func processResponse(_ rawText: String) {
         restoreUserClipboardImmediately()
         setStatus("Processing...", isBusy: true)
         
