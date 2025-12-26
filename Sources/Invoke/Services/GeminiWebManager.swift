@@ -153,7 +153,8 @@ class GeminiWebManager: NSObject, ObservableObject {
                     // 等待输入框聚焦
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                         // 使用MagicPaster模拟 Cmd+V + Enter
-                        MagicPaster.shared.pasteToBrowser()
+                        // 🔥 核心修改：传入 allowHide: false，防止隐藏 App 导致粘贴失败
+                        MagicPaster.shared.pasteToBrowser(allowHide: false)
                         
                         // 等待响应（通过JS监听）
                         self.waitForResponse(id: self.pendingPromptId!)
