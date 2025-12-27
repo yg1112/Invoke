@@ -11,17 +11,8 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
     @Published var connectionStatus = "Initializing..."
     
     private(set) var webView: WKWebView!
-    private var debugWindow: NSWindow?
     private var streamCallback: ((String) -> Void)?
     private var streamContinuation: CheckedContinuation<String, Error>?
-    
-    // 静态属性
-    static let fingerprintMaskScript = """
-    // Minimal fingerprint masking
-    Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-    """
-
-    static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
     
     override init() {
         super.init()
@@ -31,15 +22,14 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
     private func setupWebView() {
         let config = WKWebViewConfiguration()
         config.applicationNameForUserAgent = "Safari"
-        // 注入 v30 流式脚本
         let script = WKUserScript(source: Self.streamingScript, injectionTime: .atDocumentEnd, forMainFrameOnly: true)
         config.userContentController.addUserScript(script)
         config.userContentController.add(self, name: "geminiBridge")
         
         webView = WKWebView(frame: .zero, configuration: config)
+        // 关键：伪装成 Safari，防止被 Google 降级
         webView.customUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
         webView.navigationDelegate = self
-        
         loadGemini()
     }
     
@@ -48,8 +38,12 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
             webView.load(URLRequest(url: url))
         }
     }
+    
+    func injectRawCookies(_ cookieText: String, completion: @escaping () -> Void) {
+        let js = "document.cookie = '\(cookieText.replacingOccurrences(of: "'", with: "\\'"))';"
+        webView.evaluateJavaScript(js) { _, _ in completion() }
+    }
 
-    // 真·流式调用
     func streamAskGemini(prompt: String, onChunk: @escaping (String) -> Void) async throws -> String {
         guard isReady else { throw NSError(domain: "Gemini", code: 503, userInfo: [NSLocalizedDescriptionKey: "WebView not ready"]) }
         
@@ -57,9 +51,11 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
             self.streamCallback = onChunk
             self.streamContinuation = continuation
             
+            // 转义 Prompt，防止 JS 注入错误
             let safePrompt = prompt.replacingOccurrences(of: "\\", with: "\\\\")
                                    .replacingOccurrences(of: "\"", with: "\\\"")
                                    .replacingOccurrences(of: "\n", with: "\\n")
+                                   .replacingOccurrences(of: "\r", with: "")
             
             let js = "window.__streamingBridge.startGeneration(\"\(safePrompt)\");"
             
@@ -72,22 +68,7 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
         }
     }
     
-    // 添加缺失的方法
-    func injectRawCookies(_ cookieText: String, completion: @escaping () -> Void) {
-        // 简单的cookie注入，假设cookieText是JSON或字符串
-        let js = "document.cookie = '\(cookieText.replacingOccurrences(of: "'", with: "\\'"))';"
-        webView.evaluateJavaScript(js) { _, _ in
-            completion()
-        }
-    }
-    
-    func checkLoginStatus() {
-        // 触发登录检查，通过JS
-        let js = "window.__streamingBridge.post('LOGIN_STATUS', {loggedIn: !!document.querySelector('div[contenteditable=\"true\"]')});"
-        webView.evaluateJavaScript(js, completionHandler: nil)
-    }
-    
-    // v30 JS 核心：MutationObserver + CHUNK
+    // 🔥 增强版 JS：支持多种选择器，防止找不到元素
     static let streamingScript = """
     (function() {
         window.__streamingBridge = {
@@ -101,46 +82,54 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
             },
             
             startGeneration: function(prompt) {
-                // 🔥 ROBUSTNESS: 尝试多种选择器
+                // 1. 尝试多种方式找输入框
                 const input = document.querySelector('div[contenteditable="true"]') || 
-                              document.querySelector('rich-textarea > div > p') ||
+                              document.querySelector('rich-textarea p') ||
                               document.querySelector('textarea');
                               
                 if (!input) { this.post('ERROR', 'Input field not found'); return; }
                 
                 input.focus();
                 input.innerText = prompt;
-                
-                // 🔥 ROBUSTNESS: 模拟真实输入事件，触发 React/Angular 绑定
-                input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
-                input.dispatchEvent(new Event('change', { bubbles: true }));
+                // 触发事件链，确保 React 识别到输入
+                input.dispatchEvent(new InputEvent('input', {bubbles:true, inputType:'insertText'}));
                 
                 setTimeout(() => {
-                    // 🔥 ROBUSTNESS: 尝试多种发送按钮
+                    // 2. 尝试多种方式找发送按钮 (包括中文"发送")
                     const sendBtn = document.querySelector('button[aria-label*="Send"]') || 
                                     document.querySelector('button[aria-label*="发送"]') ||
-                                    document.querySelector('button.send-button'); // 猜测类名
+                                    document.querySelector('button.send-button');
                                     
                     if (sendBtn) {
                         sendBtn.click();
                         this.monitorStream();
                     } else {
-                        this.post('ERROR', 'Send button not found');
+                        // 尝试回车发送 (Fallback)
+                        const enterEvent = new KeyboardEvent('keydown', {
+                            bubbles: true, cancelable: true, key: 'Enter', code: 'Enter', keyCode: 13
+                        });
+                        input.dispatchEvent(enterEvent);
+                        this.monitorStream();
                     }
-                }, 800); // 增加延时以确保 DOM 响应
+                }, 800);
             },
             
             monitorStream: function() {
                 this.lastTextLength = 0;
                 let responseEl = null;
+                // 轮询直到回复框出现
+                let attempts = 0;
                 const findTimer = setInterval(() => {
+                    attempts++;
                     const allResponses = document.querySelectorAll('.model-response-text'); 
                     if (allResponses.length > 0) {
-                        responseEl = allResponses[allResponses.length - 1];
-                        if (responseEl) {
-                            clearInterval(findTimer);
-                            this.attachObserver(responseEl);
-                        }
+                        responseEl = allResponses[allResponses.length - 1]; // 取最后一个
+                        clearInterval(findTimer);
+                        this.attachObserver(responseEl);
+                    }
+                    if (attempts > 20) { // 10秒超时
+                        clearInterval(findTimer);
+                        this.post('ERROR', 'Timeout waiting for response bubble');
                     }
                 }, 500);
             },
@@ -157,8 +146,10 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
                 });
                 this.observer.observe(target, {childList: true, subtree: true, characterData: true});
                 
+                // 轮询检查是否生成结束 (Stop 按钮消失)
                 const doneCheck = setInterval(() => {
-                    const stopBtn = document.querySelector('button[aria-label*=\"Stop\"]');
+                    const stopBtn = document.querySelector('button[aria-label*="Stop"]'); // 停止按钮存在说明还在生成
+                    // 只有当有内容产生，且停止按钮消失时，才算结束
                     if (!stopBtn && this.lastTextLength > 0) {
                         clearInterval(doneCheck);
                         this.observer.disconnect();
@@ -167,9 +158,10 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
                 }, 1000);
             }
         };
-        // Login Checker
+        
+        // 登录状态检测
         setInterval(() => {
-            const loggedIn = !!document.querySelector('div[contenteditable=\"true\"]');
+            const loggedIn = !!document.querySelector('div[contenteditable="true"]');
             if (window.webkit && window.webkit.messageHandlers.geminiBridge) {
                 window.webkit.messageHandlers.geminiBridge.postMessage({type: 'LOGIN_STATUS', loggedIn: loggedIn});
             }
@@ -182,12 +174,16 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
         switch type {
         case "CHUNK": if let text = body["data"] as? String { streamCallback?(text) }
         case "DONE": streamContinuation?.resume(returning: "Done"); streamCallback = nil; streamContinuation = nil
-        case "ERROR": streamContinuation?.resume(throwing: NSError(domain: "JS", code: 500)); streamCallback = nil
+        case "ERROR": 
+            let msg = body["data"] as? String ?? "Unknown JS Error"
+            streamContinuation?.resume(throwing: NSError(domain: "JS", code: 500, userInfo: [NSLocalizedDescriptionKey: msg]))
+            streamCallback = nil
         case "LOGIN_STATUS":
             let s = body["loggedIn"] as? Bool ?? false
             DispatchQueue.main.async { self.isLoggedIn = s; self.connectionStatus = s ? "🟢 Connected" : "🔴 Need Login" }
         default: break
         }
     }
+    
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { isReady = true }
 }
