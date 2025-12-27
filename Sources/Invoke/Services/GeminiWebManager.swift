@@ -34,12 +34,16 @@ class GeminiWebManager: NSObject, ObservableObject {
     private struct PendingRequest {
         let prompt: String
         let model: String
+        let isFromAider: Bool  // 标记是否来自 Aider，避免循环
         let continuation: CheckedContinuation<String, Error>
     }
     
     private var requestStream: AsyncStream<PendingRequest>.Continuation?
     private var requestTask: Task<Void, Never>?
     private var watchdogTimer: Timer?
+
+    // 标记当前请求是否来自 Aider（避免循环：Aider 请求不应触发 processResponse）
+    private var isCurrentRequestFromAider = false
     
     public static let userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15"
     
@@ -60,13 +64,15 @@ class GeminiWebManager: NSObject, ObservableObject {
     private func startRequestLoop() {
         let (stream, continuation) = AsyncStream<PendingRequest>.makeStream()
         self.requestStream = continuation
-        
+
         self.requestTask = Task {
             for await request in stream {
                 while !self.isReady { try? await Task.sleep(nanoseconds: 500_000_000) }
-                
-                print("🚀 [Queue] Processing: \(request.prompt.prefix(15))...")
-                
+
+                // 设置标记：当前请求是否来自 Aider
+                self.isCurrentRequestFromAider = request.isFromAider
+                print("🚀 [Queue] Processing: \(request.prompt.prefix(15))... (isFromAider=\(request.isFromAider))")
+
                 do {
                     let response = try await self.performActualNetworkRequest(request.prompt, model: request.model)
                     request.continuation.resume(returning: response)
@@ -75,6 +81,9 @@ class GeminiWebManager: NSObject, ObservableObject {
                     if let err = error as? GeminiError, case .timeout = err { await self.reloadPageAsync() }
                     request.continuation.resume(throwing: error)
                 }
+
+                // 重置标记
+                self.isCurrentRequestFromAider = false
             }
         }
     }
@@ -102,7 +111,7 @@ class GeminiWebManager: NSObject, ObservableObject {
             styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered, defer: false
         )
-        debugWindow?.title = "Fetch Debugger (v28 Mutation Engine)"
+        debugWindow?.title = "Fetch Debugger (v29 Structural Location)"
         debugWindow?.contentView = webView
         debugWindow?.makeKeyAndOrderFront(nil)
         debugWindow?.level = .floating 
@@ -123,11 +132,20 @@ class GeminiWebManager: NSObject, ObservableObject {
         }
     }
     
-    func askGemini(prompt: String, model: String = "default") async throws -> String {
+    func askGemini(prompt: String, model: String = "default", isFromAider: Bool = false) async throws -> String {
+        print("🌐 [GeminiWebManager] askGemini called: \(prompt.prefix(30))...")
+        print("   isReady=\(isReady), isLoggedIn=\(isLoggedIn), isFromAider=\(isFromAider)")
+
         return try await withCheckedThrowingContinuation { continuation in
-            let req = PendingRequest(prompt: prompt, model: model, continuation: continuation)
-            if let stream = self.requestStream { stream.yield(req) } 
-            else { continuation.resume(throwing: GeminiError.systemError("Stream Error")) }
+            let req = PendingRequest(prompt: prompt, model: model, isFromAider: isFromAider, continuation: continuation)
+            if let stream = self.requestStream {
+                stream.yield(req)
+                print("   ✅ Request added to queue (isFromAider=\(isFromAider))")
+            }
+            else {
+                print("   ❌ Stream not available!")
+                continuation.resume(throwing: GeminiError.systemError("Stream Error"))
+            }
         }
     }
     
@@ -162,9 +180,16 @@ class GeminiWebManager: NSObject, ObservableObject {
                 let escapedText = text.replacingOccurrences(of: "\\", with: "\\\\")
                                       .replacingOccurrences(of: "\"", with: "\\\"")
                                       .replacingOccurrences(of: "\n", with: "\\n")
-                
+
                 let js = "window.__fetchBridge.sendPrompt(\"\(escapedText)\", \"\(promptId)\");"
-                self.webView.evaluateJavaScript(js) { _, _ in }
+                print("📤 [GeminiWebManager] Executing JS: sendPrompt (id=\(promptId.prefix(8))...)")
+                self.webView.evaluateJavaScript(js) { result, error in
+                    if let error = error {
+                        print("   ❌ JS Error: \(error.localizedDescription)")
+                    } else {
+                        print("   ✅ JS executed successfully")
+                    }
+                }
             }
         }
     }
@@ -350,13 +375,18 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
             print("🖥️ [JS] \(body["message"] as? String ?? "")")
         case "GEMINI_RESPONSE":
             let content = body["content"] as? String ?? ""
+            let isFromAider = self.isCurrentRequestFromAider  // 捕获当前标记
             DispatchQueue.main.async { [weak self] in
                 if let callback = self?.responseCallback {
                     callback(content.isEmpty ? "Error: Empty response" : content)
                     self?.responseCallback = nil
-                    
-                    if !content.isEmpty && !content.hasPrefix("Error:") { 
-                        GeminiLinkLogic.shared.processResponse(content) 
+
+                    // 只有非 Aider 请求才触发 processResponse，避免无限循环
+                    if !isFromAider && !content.isEmpty && !content.hasPrefix("Error:") {
+                        print("📋 [GeminiWebManager] Triggering processResponse (user request)")
+                        GeminiLinkLogic.shared.processResponse(content)
+                    } else if isFromAider {
+                        print("⏭️ [GeminiWebManager] Skipping processResponse (Aider request)")
                     }
                 }
             }
@@ -368,7 +398,7 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
     }
 }
 
-// MARK: - Injected Scripts (V28 - Mutation Engine)
+// MARK: - Injected Scripts (V29 - Structural Location)
 extension GeminiWebManager {
     static let fingerprintMaskScript = """
     (function() {
@@ -416,25 +446,30 @@ extension GeminiWebManager {
 
             // ===== 主入口 =====
             sendPrompt: function(text, id) {
-                this.log("📤 sendPrompt called. State: " + this.state + ", ID: " + id);
+                try {
+                    this.log("📤 sendPrompt called. State: " + this.state + ", ID: " + id);
 
-                // 强制重置，确保干净状态
-                this.reset();
+                    // 强制重置，确保干净状态
+                    this.reset();
 
-                this.state = 'sending';
-                this.currentPromptId = id;
-                this.lastSentText = text.trim();
-                this.generationStartTime = Date.now();
+                    this.state = 'sending';
+                    this.currentPromptId = id;
+                    this.lastSentText = text.trim();
+                    this.generationStartTime = Date.now();
 
-                // 1. 注入文本并发送
-                const success = this.injectAndSend(text);
-                if (!success) {
-                    this.finish(id, 'Error: Failed to inject text');
-                    return;
+                    // 1. 注入文本并发送
+                    const success = this.injectAndSend(text);
+                    if (!success) {
+                        this.finish(id, 'Error: Failed to inject text');
+                        return;
+                    }
+
+                    // 2. 启动完成检测
+                    this.startCompletionDetection(id);
+                } catch (e) {
+                    this.log("❌ sendPrompt error: " + e.message);
+                    this.finish(id, 'Error: ' + e.message);
                 }
-
-                // 2. 启动完成检测
-                this.startCompletionDetection(id);
             },
 
             // ===== Part 0: 注入文本并发送 (Enhanced Event Dispatch) =====
@@ -525,6 +560,9 @@ extension GeminiWebManager {
 
                 // 检查是否成功触发生成（Stop 按钮应该出现）
                 setTimeout(() => {
+                    // 状态检查：如果已重置，不继续
+                    if (self.state === 'idle') return;
+
                     const stopBtn = document.querySelector(
                         'button[aria-label*="Stop"], button[aria-label*="stop"], ' +
                         'button[data-tooltip*="Stop"]'
@@ -533,7 +571,7 @@ extension GeminiWebManager {
                     if (stopBtn && stopBtn.offsetParent !== null) {
                         self.log("✅ Generation confirmed (Stop button visible)");
                         self.stopButtonEverSeen = true;
-                    } else if (attempt < maxAttempts) {
+                    } else if (attempt < maxAttempts && self.state === 'generating') {
                         // 没有看到 Stop 按钮，重试发送
                         self.log("⚠️ Stop button not seen, retrying send...");
 
@@ -541,9 +579,10 @@ extension GeminiWebManager {
                         input.dispatchEvent(new Event('input', { bubbles: true }));
 
                         setTimeout(() => {
+                            if (self.state === 'idle') return;  // 状态检查
                             self.attemptSend(input, attempt + 1);
                         }, 500);
-                    } else {
+                    } else if (self.state === 'generating') {
                         self.log("⚠️ Max send attempts reached, proceeding anyway");
                     }
                 }, 800);
@@ -694,6 +733,11 @@ extension GeminiWebManager {
 
             // ===== Part 2: 获取AI回复元素（目标） =====
             getResponseElement: function() {
+                // 状态检查：如果不在生成/完成状态，不执行
+                if (this.state === 'idle') {
+                    return null;
+                }
+
                 // 先尝试找到用户消息元素
                 if (!this.userPromptElement) {
                     this.userPromptElement = this.findUserPromptElement(this.lastSentText);
@@ -911,6 +955,9 @@ extension GeminiWebManager {
                 this.stopButtonEverSeen = false;
 
                 this.graceTimeout = setTimeout(() => {
+                    // 状态检查：如果已重置，不继续
+                    if (self.state === 'idle') return;
+
                     self.inGracePeriod = false;
                     self.log("⏱️ Grace period ended, now monitoring for completion");
 
@@ -943,7 +990,9 @@ extension GeminiWebManager {
                     // 只有当 Stop 按钮曾经出现过，现在消失了，才算完成
                     if (self.state === 'generating' && self.stopButtonEverSeen && !self.isGenerating()) {
                         setTimeout(() => {
-                            if (!self.isGenerating() && self.state === 'generating') {
+                            // 再次检查状态，防止在 reset 后触发
+                            if (self.state !== 'generating') return;
+                            if (!self.isGenerating()) {
                                 self.log("🎯 Button observer detected completion (Stop button disappeared)");
                                 self.onGenerationComplete(id);
                             }

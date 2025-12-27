@@ -93,7 +93,7 @@ class LocalAPIServer: ObservableObject {
                 // 增加超时控制 (60秒)
                 let responseText = try await withThrowingTaskGroup(of: String.self) { group in
                     group.addTask {
-                        return try await GeminiWebManager.shared.askGemini(prompt: prompt)
+                        return try await GeminiWebManager.shared.askGemini(prompt: prompt, isFromAider: true)
                     }
                     group.addTask {
                         try await Task.sleep(nanoseconds: 60 * 1_000_000_000)
