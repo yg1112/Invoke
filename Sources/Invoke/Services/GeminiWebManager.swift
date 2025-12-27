@@ -153,62 +153,67 @@ class GeminiWebManager: NSObject, ObservableObject {
     }
     
     private func performActualNetworkRequest(_ text: String, model: String) async throws -> String {
+        // CRITICAL FIX: Already on MainActor, don't dispatch again
+        print("🔍 [performActualNetworkRequest] Starting request on thread: \(Thread.isMainThread ? "MAIN ✓" : "BACKGROUND ⚠️")")
+
         return try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.main.async {
-                self.isProcessing = true
-                let promptId = UUID().uuidString
-                
+            // We're already on MainActor, no need for DispatchQueue.main.async
+            self.isProcessing = true
+            let promptId = UUID().uuidString
+
+            print("🔍 [performActualNetworkRequest] Set up continuation for ID: \(promptId.prefix(8))")
+
+            self.watchdogTimer?.invalidate()
+            self.responseCallback = nil
+
+            self.responseCallback = { response in
+                print("📥 [performActualNetworkRequest] Callback triggered for ID: \(promptId.prefix(8))")
                 self.watchdogTimer?.invalidate()
-                self.responseCallback = nil
-                
-                self.responseCallback = { response in
-                    self.watchdogTimer?.invalidate()
-                    self.isProcessing = false
-                    
-                    if response.hasPrefix("Error:") { 
-                        continuation.resume(throwing: GeminiError.responseError(response)) 
-                    } else { 
-                        continuation.resume(returning: response) 
-                    }
+                self.isProcessing = false
+
+                if response.hasPrefix("Error:") {
+                    continuation.resume(throwing: GeminiError.responseError(response))
+                } else {
+                    continuation.resume(returning: response)
                 }
-                
-                // 90秒兜底，防止 MutationObserver 彻底死锁（虽然极罕见）
-                self.watchdogTimer = Timer.scheduledTimer(withTimeInterval: 90.0, repeats: false) { [weak self] _ in
-                    print("⏰ Timeout. Force scrape...")
-                    Task { @MainActor in
-                        self?.forceScrape(id: promptId)
-                    }
+            }
+
+            // 90秒兜底，防止 MutationObserver 彻底死锁（虽然极罕见）
+            self.watchdogTimer = Timer.scheduledTimer(withTimeInterval: 90.0, repeats: false) { [weak self] _ in
+                print("⏰ Timeout. Force scrape...")
+                Task { @MainActor in
+                    self?.forceScrape(id: promptId)
                 }
-                
-                let escapedText = text.replacingOccurrences(of: "\\", with: "\\\\")
-                                      .replacingOccurrences(of: "\"", with: "\\\"")
-                                      .replacingOccurrences(of: "\n", with: "\\n")
+            }
 
-                // DETAILED PRE-FLIGHT DIAGNOSTICS
-                print("📤 [GeminiWebManager] Pre-flight check:")
-                print("   WebView: \(self.webView != nil ? "alive" : "nil")")
-                print("   isLoading: \(self.webView.isLoading)")
-                print("   URL: \(self.webView.url?.absoluteString ?? "none")")
-                print("   Current thread: \(Thread.isMainThread ? "MAIN ✓" : "BACKGROUND ⚠️")")
+            let escapedText = text.replacingOccurrences(of: "\\", with: "\\\\")
+                                  .replacingOccurrences(of: "\"", with: "\\\"")
+                                  .replacingOccurrences(of: "\n", with: "\\n")
 
-                let js = "window.__fetchBridge.sendPrompt(\"\(escapedText)\", \"\(promptId)\");"
-                print("📤 [GeminiWebManager] Executing JS: sendPrompt (id=\(promptId.prefix(8))...)")
+            // DETAILED PRE-FLIGHT DIAGNOSTICS
+            print("📤 [GeminiWebManager] Pre-flight check:")
+            print("   WebView: \(self.webView != nil ? "alive" : "nil")")
+            print("   isLoading: \(self.webView.isLoading)")
+            print("   URL: \(self.webView.url?.absoluteString ?? "none")")
+            print("   Current thread: \(Thread.isMainThread ? "MAIN ✓" : "BACKGROUND ⚠️")")
 
-                let startTime = Date()
-                self.webView.evaluateJavaScript(js) { result, error in
-                    let elapsed = Date().timeIntervalSince(startTime)
-                    print("   ⏱️ Callback fired after \(String(format: "%.3f", elapsed))s")
-                    print("   Callback thread: \(Thread.isMainThread ? "MAIN ✓" : "BACKGROUND ⚠️")")
+            let js = "window.__fetchBridge.sendPrompt(\"\(escapedText)\", \"\(promptId)\");"
+            print("📤 [GeminiWebManager] Executing JS: sendPrompt (id=\(promptId.prefix(8))...)")
 
-                    if let error = error {
-                        print("   ❌ JS Error: \(error.localizedDescription)")
-                        print("   Error domain: \(error._domain)")
-                        print("   Error code: \(error._code)")
-                    } else {
-                        print("   ✅ JS executed successfully")
-                        if let result = result {
-                            print("   Result: \(result)")
-                        }
+            let startTime = Date()
+            self.webView.evaluateJavaScript(js) { result, error in
+                let elapsed = Date().timeIntervalSince(startTime)
+                print("   ⏱️ Callback fired after \(String(format: "%.3f", elapsed))s")
+                print("   Callback thread: \(Thread.isMainThread ? "MAIN ✓" : "BACKGROUND ⚠️")")
+
+                if let error = error {
+                    print("   ❌ JS Error: \(error.localizedDescription)")
+                    print("   Error domain: \(error._domain)")
+                    print("   Error code: \(error._code)")
+                } else {
+                    print("   ✅ JS executed successfully")
+                    if let result = result {
+                        print("   Result: \(result)")
                     }
                 }
             }

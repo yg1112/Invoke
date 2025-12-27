@@ -1,0 +1,93 @@
+2025-12-26 21:29:03.715 Invoke[83237:3376563] error messaging the mach port for IMKCFRunLoopWakeUpReliable
+✅ API Server on port 3000
+⚠️ Debug Mode: Skipping notifications
+📍 Aider found in config: /Users/yukungao/.pyenv/versions/3.10.13/bin/aider
+🚀 Launching Aider from: /Users/yukungao/.pyenv/versions/3.10.13/bin/aider
+✅ Aider process started successfully (PID: 83241)
+👂 Listening started... (Timer on main RunLoop)
+⏭️ Aider already running on /Users/yukungao/github/Fetch, skipping...
+🔧 [Queue] Request loop started on MainActor
+✅ [Aider] Sent message to stdin: hello...
+🔌 [LocalAPIServer] Connection 887A5CFE opened from 127.0.0.1:58400
+   ✅ Connection 887A5CFE ready
+   📥 Connection 887A5CFE received 3454 bytes
+🔧 [LocalAPIServer] Task started on MainActor for prompt: hello
+
+To suggest changes to a...
+🌐 [GeminiWebManager] askGemini called: hello
+
+To suggest changes to a...
+   isReady=true, isLoggedIn=true, isFromAider=true
+   ✅ Request added to queue (isFromAider=true)
+🚀 [Queue] Processing: hello
+
+To sugge... (isFromAider=true)
+   Queue thread: MAIN ✓
+📤 [GeminiWebManager] Pre-flight check:
+   WebView: alive
+   isLoading: false
+   URL: https://gemini.google.com/app
+   Current thread: MAIN ✓
+📤 [GeminiWebManager] Executing JS: sendPrompt (id=D86F0485...)
+🖥️ [JS] 📤 sendPrompt called. State: idle, ID: D86F0485-7D06-4B16-A221-12214F40BB80
+🖥️ [JS] 🔄 Resetting bridge state
+🖥️ [JS] 📝 Text injected, events dispatched
+🖥️ [JS] 👀 Starting completion detection with grace period
+   ⏱️ Callback fired after 0.222s
+   Callback thread: MAIN ✓
+   ✅ JS executed successfully
+🖥️ [JS] 📤 Send attempt 1/3
+🖥️ [JS] 👆 Clicked Send Button
+🖥️ [JS] ⚡ State -> generating
+🖥️ [JS] 👁️ Stop button detected - generation confirmed
+🖥️ [JS] ✅ Generation confirmed (Stop button visible)
+🖥️ [JS] ⏱️ Grace period ended, now monitoring for completion
+🖥️ [JS] 🔍 Searching for user prompt (prefix): 'hello to suggest cha'
+🖥️ [JS] ✅ Prefix match found (score: 0.98, len: 872)
+🖥️ [JS] ✅ Found message container at depth 7
+🖥️ [JS] ✅ Found response as direct sibling
+🖥️ [JS] ✅ Found response as direct sibling
+🖥️ [JS] ✅ Found response as direct sibling
+🖥️ [JS] ✅ Found response as direct sibling
+🖥️ [JS] ✅ Found response as direct sibling
+🖥️ [JS] ✅ Found response as direct sibling
+🖥️ [JS] ✅ Found response as direct sibling
+🖥️ [JS] 🎯 Button observer detected completion (Stop button disappeared)
+🖥️ [JS] ✅ Generation complete, extracting response...
+🖥️ [JS] ✅ Found response as direct sibling
+🖥️ [JS] 📝 Extracted content length: 460
+🖥️ [JS] 🏁 Finishing with content length: 460
+🖥️ [JS] 🔄 Resetting bridge state
+⏭️ [GeminiWebManager] Skipping processResponse (Aider request)
+✅ [Aider] Sent message to stdin: will this chate window time ou...
+✅ [Aider] Sent message to stdin: what are you doing...
+   🔚 Connection 887A5CFE closed (no data)
+   🚫 Connection 887A5CFE cancelled
+🔌 [LocalAPIServer] Connection F5C2D3D3 opened from 127.0.0.1:59295
+   ✅ Connection F5C2D3D3 ready
+   📥 Connection F5C2D3D3 received 3454 bytes
+🔧 [LocalAPIServer] Task started on MainActor for prompt: hello
+
+To suggest changes to a...
+🌐 [GeminiWebManager] askGemini called: hello
+
+To suggest changes to a...
+   isReady=true, isLoggedIn=true, isFromAider=true
+   ✅ Request added to queue (isFromAider=true)
+🚀 [Queue] Processing: hello
+
+To sugge... (isFromAider=true)
+   Queue thread: MAIN ✓
+📤 [GeminiWebManager] Pre-flight check:
+   WebView: alive
+   isLoading: false
+   URL: https://gemini.google.com/app/2907fe0d34e1bb3e
+   Current thread: MAIN ✓
+📤 [GeminiWebManager] Executing JS: sendPrompt (id=1F49E089...)
+🖥️ [JS] 📤 sendPrompt called. State: idle, ID: 1F49E089-31A6-4793-96BB-C1C1080650C7
+🖥️ [JS] 🔄 Resetting bridge state
+🖥️ [JS] 📝 Text injected, events dispatched
+🖥️ [JS] 👀 Starting completion detection with grace period
+   ⏱️ Callback fired after 0.192s
+   Callback thread: MAIN ✓
+   ✅ JS executed success
