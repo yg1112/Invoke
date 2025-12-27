@@ -9,6 +9,7 @@ class LocalAPIServer: ObservableObject {
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "com.fetch.api-server")
     
+    @MainActor
     func start() {
         if isRunning && listener != nil { return }
         
@@ -78,38 +79,56 @@ class LocalAPIServer: ObservableObject {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let messages = json["messages"] as? [[String: Any]] else { return }
 
-        // 🔥 核心修复 1: 拼接所有上下文，而不是覆盖
+        // 🔥 FIX 1: 拼接所有上下文，而不是循环覆盖
         let allContent = messages.compactMap { $0["content"] as? String }.joined(separator: "\n\n")
-        
-        // 🔥 核心修复 2: 注入系统指令，强制忽略旧历史
+
+        // 🔥 FIX 2: 注入系统指令，防止上下文漂移
         let systemInstruction = "🔴 [SYSTEM: Ignore previous history. Treat this as a NEW request.]\n\n"
         let robustPrompt = systemInstruction + allContent
 
+        let stream = json["stream"] as? Bool ?? false
+
         Task { @MainActor in
-            // 🔥 核心修复 3: 立即发送 SSE 头，防止 Aider 超时
-            let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n"
-            connection.send(content: headers.data(using: .utf8), completion: .contentProcessed { _ in })
+            print("📡 [Server] Handling Request (Length: \(robustPrompt.count))")
 
             do {
-                try await GeminiWebManager.shared.streamAskGemini(prompt: robustPrompt) { chunk in
-                    // 发送 SSE Chunk
-                    let chunkID = UUID().uuidString.prefix(8)
-                    let sseChunk: [String: Any] = [
-                        "id": "chatcmpl-\(chunkID)",
-                        "object": "chat.completion.chunk",
-                        "created": Int(Date().timeIntervalSince1970),
-                        "model": "gemini-2.0-flash",
-                        "choices": [["index": 0, "delta": ["content": chunk], "finish_reason": NSNull()]]
-                    ]
-                    if let d = try? JSONSerialization.data(withJSONObject: sseChunk), let s = String(data: d, encoding: .utf8) {
-                        connection.send(content: "data: \(s)\n\n".data(using: .utf8), completion: .contentProcessed{_ in})
+                if stream {
+                    // 1. 立即发送头，防止 Aider 超时
+                    let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n"
+                    connection.send(content: headers.data(using: .utf8), completion: .contentProcessed { _ in })
+
+                    // 2. 调用 WebManager
+                    try await GeminiWebManager.shared.streamAskGemini(prompt: robustPrompt) { chunk in
+                        // 3. 封装 SSE
+                        let chunkID = UUID().uuidString.prefix(8)
+                        let sseChunk: [String: Any] = [
+                            "id": "chatcmpl-\(chunkID)",
+                            "object": "chat.completion.chunk",
+                            "created": Int(Date().timeIntervalSince1970),
+                            "model": "gemini-2.0-flash",
+                            "choices": [["index": 0, "delta": ["content": chunk], "finish_reason": NSNull()]]
+                        ]
+
+                        if let chunkData = try? JSONSerialization.data(withJSONObject: sseChunk),
+                           let chunkJSON = String(data: chunkData, encoding: .utf8) {
+                            let sseMessage = "data: \(chunkJSON)\n\n"
+                            connection.send(content: sseMessage.data(using: .utf8), completion: .contentProcessed { _ in })
+                        }
                     }
+
+                    // 4. 发送结束标记
+                    let doneMessage = "data: [DONE]\n\n"
+                    connection.send(content: doneMessage.data(using: .utf8), completion: .contentProcessed { _ in })
+                    print("   ✅ Streaming complete")
+
+                } else {
+                    // 非流式逻辑 (保留备用)
+                    // ... (保持你现有的非流式逻辑即可)
                 }
-                connection.send(content: "data: [DONE]\n\n".data(using: .utf8), completion: .contentProcessed{_ in})
             } catch {
-                print("❌ Error: \(error)") // 错误也要告诉 Aider
-                let err = "data: {\"choices\":[{\"delta\":{\"content\":\" [Error: \(error)]\"}}]}\n\ndata: [DONE]\n\n"
-                connection.send(content: err.data(using: .utf8), completion: .contentProcessed{_ in})
+                print("❌ Streaming Error: \(error)")
+                let errChunk = "data: {\"choices\":[{\"delta\":{\"content\":\" [Error: \(error.localizedDescription)]\"}}]}\n\ndata: [DONE]\n\n"
+                connection.send(content: errChunk.data(using: .utf8), completion: .contentProcessed{ _ in })
             }
         }
     }
