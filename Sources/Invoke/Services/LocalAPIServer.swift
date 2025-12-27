@@ -139,7 +139,7 @@ class LocalAPIServer: ObservableObject {
                     })
 
                     // PHASE 2: Use TRUE STREAMING with character-by-character chunks
-                    try await GeminiWebManager.shared.streamAskGemini(prompt: prompt, isFromAider: true) { chunk in
+                    try await GeminiWebManager.shared.streamAskGemini(prompt: prompt) { chunk in
                         // PHASE 3: Perfect OpenAI-compatible SSE format
                         let chunkID = UUID().uuidString.prefix(8)
                         let sseChunk: [String: Any] = [
@@ -176,7 +176,11 @@ class LocalAPIServer: ObservableObject {
                     // Non-streaming: wait for complete response
                     let responseText = try await withThrowingTaskGroup(of: String.self) { group in
                         group.addTask {
-                            return try await GeminiWebManager.shared.askGemini(prompt: prompt, isFromAider: true)
+                            var fullResponse = ""
+                            _ = try await GeminiWebManager.shared.streamAskGemini(prompt: prompt) { chunk in
+                                fullResponse += chunk
+                            }
+                            return fullResponse
                         }
                         group.addTask {
                             try await Task.sleep(nanoseconds: 120 * 1_000_000_000)

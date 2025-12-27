@@ -63,9 +63,12 @@ class BridgeService: ObservableObject {
         
         Task {
             do {
-                let response = try await webManager.askGemini(prompt: text, model: model)
+                var fullResponse = ""
+                _ = try await webManager.streamAskGemini(prompt: text) { chunk in
+                    fullResponse += chunk
+                }
                 DispatchQueue.main.async {
-                    completion(response)
+                    completion(fullResponse)
                 }
             } catch {
                 DispatchQueue.main.async {
@@ -77,6 +80,6 @@ class BridgeService: ObservableObject {
     
     /// 检查健康状态
     func checkHealth() {
-        webManager.checkLoginStatus()
+        // Login status is checked automatically via JS interval
     }
 }
