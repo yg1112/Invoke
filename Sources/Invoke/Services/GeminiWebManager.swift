@@ -101,15 +101,29 @@ class GeminiWebManager: NSObject, ObservableObject, WKScriptMessageHandler, WKNa
             },
             
             startGeneration: function(prompt) {
-                const input = document.querySelector('div[contenteditable=\"true\"]');
+                // 增加 fallback，防止 Google 改 class 名
+                const input = document.querySelector('div[contenteditable="true"]') || 
+                              document.querySelector('rich-textarea p') ||
+                              document.querySelector('textarea');
+                              
                 if (!input) { this.post('ERROR', 'Input not found'); return; }
+                
+                input.focus();
                 input.innerText = prompt;
-                input.dispatchEvent(new Event('input', {bubbles:true}));
+                // 模拟更真实的用户输入事件，触发 React/Angular 的绑定
+                input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+                
                 setTimeout(() => {
-                    const sendBtn = document.querySelector('button[aria-label*=\"Send\"]');
-                    if (sendBtn) sendBtn.click();
-                    this.monitorStream();
-                }, 100);
+                    const sendBtn = document.querySelector('button[aria-label*="Send"]') || 
+                                    document.querySelector('button[aria-label*="发送"]') ||
+                                    document.querySelector('button.send-button'); // 假设的兜底
+                    if (sendBtn) {
+                        sendBtn.click();
+                        this.monitorStream();
+                    } else {
+                        this.post('ERROR', 'Send button not found');
+                    }
+                }, 600); // 稍微加长一点等待时间
             },
             
             monitorStream: function() {

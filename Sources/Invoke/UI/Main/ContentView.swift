@@ -4,6 +4,7 @@ struct ContentView: View {
     // 直接观测核心组件，不再需要中间商
     @StateObject private var webManager = GeminiWebManager.shared
     @StateObject private var server = LocalAPIServer.shared
+    @StateObject private var chromeBridge = ChromeBridge.shared
     
     // 自动滚动日志
     @State private var logText = ""
@@ -69,6 +70,18 @@ struct ContentView: View {
         .frame(width: 400, height: 250)
         .onAppear {
             server.start()
+            
+            // 自动尝试“盗取”Cookie (如果还没登录)
+            if !webManager.isLoggedIn {
+                chromeBridge.fetchCookiesFromChrome { result in
+                    if case .success(let cookies) = result {
+                        webManager.injectRawCookies(cookies) {
+                            print("🍪 Cookies injected successfully via Chrome Bridge!")
+                            webManager.loadGemini() // 刷新页面生效
+                        }
+                    }
+                }
+            }
         }
     }
     

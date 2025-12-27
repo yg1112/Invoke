@@ -117,10 +117,12 @@ class LocalAPIServer: ObservableObject {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let messages = json["messages"] as? [[String: Any]] else { return }
 
-        var prompt = ""
-        for msg in messages {
-            if let content = msg["content"] as? String { prompt = content }
-        }
+        let allContent = messages.compactMap { $0["content"] as? String }.joined(separator: "\n\n")
+
+        // 加上防漂移指令，告诉 Gemini 这是一个新的无状态请求
+        let systemInstruction = "🔴 [SYSTEM: This is a stateless API request. Ignore ALL previous web session history. The following text contains the FULL context (files + history + query). Treat it as a fresh start.]\n\n"
+
+        let prompt = systemInstruction + allContent
 
         let stream = json["stream"] as? Bool ?? false
 
