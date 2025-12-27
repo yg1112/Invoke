@@ -2,7 +2,7 @@
 echo "🚀 Quick Test for Fetch (Invisible Mode)"
 echo "========================================"
 
-# 1. 启动 App (如果没启动)
+# 1. 确保 App 在运行
 if ! pgrep -x "Fetch" > /dev/null; then
     echo "⚡️ Starting Fetch..."
     open -a Fetch
@@ -11,27 +11,32 @@ else
     echo "✅ Fetch is running."
 fi
 
-# 2. 测试 API 端口 (这是 Woz 关心的)
+# 2. 检查端口 (Woz 的检查点)
 echo "🔍 Checking Port 3000..."
 if lsof -i :3000 > /dev/null; then
-    echo "✅ Port 3000 is active. The Ear is listening."
+    echo "✅ Port 3000 is ACTIVE. The Ear is listening."
 else
     echo "❌ Port 3000 is CLOSED. The Server is down."
     exit 1
 fi
 
-# 3. 模拟一次 Aider 请求 (这是 Jobs 关心的体验)
-echo "🧪 Sending a test thought..."
-curl -v http://127.0.0.1:3000/v1/chat/completions \
+# 3. 发送真实请求 (Jobs 的体验点)
+echo "🧪 Sending a test thought to Gemini..."
+# 发送一个简单的 "Hello" 请求
+RESPONSE=$(curl -s -X POST http://127.0.0.1:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "gemini-2.0-flash",
-    "messages": [{"role": "user", "content": "Say EXACTLY one word: ALIVE"}]
-  }'
+    "messages": [{"role": "user", "content": "Reply with exactly one word: CONNECTED"}]
+  }')
 
-echo ""
-echo "========================================"
-echo "👀 观察："
-echo "1. 菜单栏的绿点是否闪烁？(如果有实现状态变化)"
-echo "2. 终端是否输出了 'ALIVE'？"
-echo "3. 如果成功，说明隐形桥梁已打通."
+echo "📄 Raw Response: $RESPONSE"
+
+if echo "$RESPONSE" | grep -q "CONNECTED"; then
+    echo ""
+    echo "✅✅✅ SUCCESS: Neural Link Established!"
+    echo "🎉 You are ready to run Aider."
+else
+    echo ""
+    echo "⚠️  WARNING: Response received but content unexpected. Check the 'Show Brain' window."
+fi
