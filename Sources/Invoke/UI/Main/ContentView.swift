@@ -51,12 +51,14 @@ var body: some View {
         .cornerRadius(16)
         .onAppear {
             toggleAlwaysOnTop()
-            // App 启动时自动启动 Bridge
+
+            // INVISIBLE BRIDGE: Start server IMMEDIATELY (before project selection)
+            LocalAPIServer.shared.start()
+
+            // Start Bridge for Gemini login
             bridgeService.startBridge()
 
-            // INVISIBLE BRIDGE: Removed GeminiLinkLogic setup - Aider handles all logic
-
-            // 如果已有 projectPath，启动 Aider
+            // Start Aider if project already set
             if !projectPath.isEmpty {
                 aiderService.startAider(projectPath: projectPath)
             }
