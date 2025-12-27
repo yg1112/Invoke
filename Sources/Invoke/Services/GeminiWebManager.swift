@@ -151,7 +151,61 @@ class GeminiWebManager: NSObject, ObservableObject {
             }
         }
     }
-    
+
+    /// INVISIBLE BRIDGE: True streaming - character-by-character diff calculation
+    @MainActor
+    func streamAskGemini(prompt: String, model: String = "default", isFromAider: Bool = false, onChunk: @escaping (String) -> Void) async throws {
+        print("📡 [streamAskGemini] Starting TRUE STREAMING for: \(prompt.prefix(30))...")
+
+        guard isReady && isLoggedIn else {
+            throw GeminiError.systemError("WebView not ready")
+        }
+
+        self.isProcessing = true
+        self.isCurrentRequestFromAider = isFromAider
+        let promptId = UUID().uuidString
+        let escapedText = prompt.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"").replacingOccurrences(of: "\n", with: " ")
+
+        // Inject and send the prompt
+        let js = "window.__fetchBridge.sendPrompt(\"\(escapedText)\", \"\(promptId)\");"
+        try await webView.evaluateJavaScript(js)
+        print("   ✅ Prompt injected, starting stream polling...")
+
+        // Poll for changes every 100ms
+        var lastContent = ""
+        var isGenerating = true
+
+        while isGenerating {
+            try await Task.sleep(nanoseconds: 100_000_000) // 100ms
+
+            // Check if generation is still ongoing
+            let genStatus = try await webView.evaluateJavaScript("window.__fetchBridge.isGenerating()") as? Bool ?? false
+
+            // Get current response content
+            let currentJS = "(() => { const el = window.__fetchBridge.getResponseElement(); return el ? el.innerText.trim() : ''; })()"
+            let currentContent = (try await webView.evaluateJavaScript(currentJS) as? String) ?? ""
+
+            // Calculate diff (new characters)
+            if currentContent.count > lastContent.count {
+                let newChars = String(currentContent.dropFirst(lastContent.count))
+                if !newChars.isEmpty {
+                    print("   📤 Streaming chunk: \(newChars.count) chars")
+                    onChunk(newChars)
+                }
+                lastContent = currentContent
+            }
+
+            // Check if generation is complete
+            if !genStatus && !currentContent.isEmpty {
+                isGenerating = false
+                print("   ✅ Stream complete: \(currentContent.count) total chars")
+            }
+        }
+
+        self.isProcessing = false
+        self.isCurrentRequestFromAider = false
+    }
+
     private func performActualNetworkRequest(_ text: String, model: String) async throws -> String {
         // CRITICAL FIX: Already on MainActor, don't dispatch again
         print("🔍 [performActualNetworkRequest] Starting request on thread: \(Thread.isMainThread ? "MAIN ✓" : "BACKGROUND ⚠️")")
@@ -406,14 +460,7 @@ extension GeminiWebManager: WKNavigationDelegate, WKScriptMessageHandler {
                 if let callback = self?.responseCallback {
                     callback(content.isEmpty ? "Error: Empty response" : content)
                     self?.responseCallback = nil
-
-                    // 只有非 Aider 请求才触发 processResponse，避免无限循环
-                    if !isFromAider && !content.isEmpty && !content.hasPrefix("Error:") {
-                        print("📋 [GeminiWebManager] Triggering processResponse (user request)")
-                        GeminiLinkLogic.shared.processResponse(content)
-                    } else if isFromAider {
-                        print("⏭️ [GeminiWebManager] Skipping processResponse (Aider request)")
-                    }
+                    // INVISIBLE BRIDGE: Removed processResponse call - Aider handles all logic
                 }
             }
         case "LOGIN_STATUS":

@@ -111,76 +111,91 @@ class LocalAPIServer: ObservableObject {
         }
     }
     
+    /// INVISIBLE BRIDGE: Perfect SSE streaming with OpenAI format
     private func handleChatCompletion(_ connection: NWConnection, _ body: String) {
         guard let data = body.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let messages = json["messages"] as? [[String: Any]] else { return }
-        
+
         var prompt = ""
         for msg in messages {
             if let content = msg["content"] as? String { prompt = content }
         }
-        
+
         let stream = json["stream"] as? Bool ?? false
 
-        // CRITICAL FIX: Force Task to run on MainActor for WebKit thread safety
         Task { @MainActor in
-            print("🔧 [LocalAPIServer] Task started on MainActor for prompt: \(prompt.prefix(30))...")
+            print("📡 [LocalAPIServer] TRUE STREAMING for: \(prompt.prefix(30))...")
+
             do {
                 if stream {
-                    // 1. 关键修复：立即发送 Header，防止客户端超时
+                    // PHASE 3: Immediately send SSE headers (prevents client timeout)
                     let headers = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n"
                     connection.send(content: headers.data(using: .utf8), completion: .contentProcessed { error in
                         if let error = error {
-                            print("❌ Failed to send headers: \(error)")
+                            print("❌ Failed to send SSE headers: \(error)")
                             connection.cancel()
                         }
                     })
-                }
-                
-                // 2. 执行耗时操作
-                // CRITICAL FIX: Increase timeout to 120s (must be longer than WebView watchdog 90s)
-                let responseText = try await withThrowingTaskGroup(of: String.self) { group in
-                    group.addTask {
-                        return try await GeminiWebManager.shared.askGemini(prompt: prompt, isFromAider: true)
+
+                    // PHASE 2: Use TRUE STREAMING with character-by-character chunks
+                    try await GeminiWebManager.shared.streamAskGemini(prompt: prompt, isFromAider: true) { chunk in
+                        // PHASE 3: Perfect OpenAI-compatible SSE format
+                        let chunkID = UUID().uuidString.prefix(8)
+                        let sseChunk: [String: Any] = [
+                            "id": "chatcmpl-\(chunkID)",
+                            "object": "chat.completion.chunk",
+                            "created": Int(Date().timeIntervalSince1970),
+                            "model": "gemini-2.0-flash",
+                            "choices": [[
+                                "index": 0,
+                                "delta": ["content": chunk],
+                                "finish_reason": NSNull()
+                            ]]
+                        ]
+
+                        if let chunkData = try? JSONSerialization.data(withJSONObject: sseChunk),
+                           let chunkJSON = String(data: chunkData, encoding: .utf8) {
+                            let sseMessage = "data: \(chunkJSON)\n\n"
+                            connection.send(content: sseMessage.data(using: .utf8), completion: .contentProcessed { _ in })
+                        }
                     }
-                    group.addTask {
-                        // 120s timeout - allows watchdog (90s) + grace period
-                        try await Task.sleep(nanoseconds: 120 * 1_000_000_000)
-                        print("⏰ [LocalAPIServer] 120s timeout reached")
-                        throw URLError(.timedOut)
-                    }
-                    let result = try await group.next()!
-                    group.cancelAll()
-                    return result
-                }
-                
-                if stream {
-                    // 3. 发送实际内容（Header 已发送，只发送数据）
-                    sendStreamChunk(connection, text: responseText)
+
+                    // Send [DONE] marker
+                    let doneMessage = "data: [DONE]\n\n"
+                    connection.send(content: doneMessage.data(using: .utf8), completion: .contentProcessed { error in
+                        if let error = error {
+                            print("   ⚠️ Failed to send [DONE]: \(error)")
+                            connection.cancel()
+                        } else {
+                            print("   ✅ Streaming complete with [DONE]")
+                        }
+                    })
+
                 } else {
+                    // Non-streaming: wait for complete response
+                    let responseText = try await withThrowingTaskGroup(of: String.self) { group in
+                        group.addTask {
+                            return try await GeminiWebManager.shared.askGemini(prompt: prompt, isFromAider: true)
+                        }
+                        group.addTask {
+                            try await Task.sleep(nanoseconds: 120 * 1_000_000_000)
+                            throw URLError(.timedOut)
+                        }
+                        let result = try await group.next()!
+                        group.cancelAll()
+                        return result
+                    }
                     sendJSON(connection, ["choices": [["message": ["role": "assistant", "content": responseText]]]])
                 }
             } catch {
-                print("❌ Generation Error: \(error)")
-                // 错误情况下也保持 keep-alive（让客户端决定是否重试）
-                if !stream {
-                    let errResp = "HTTP/1.1 500 Error\r\nConnection: keep-alive\r\n\r\n{\"error\": \"\(error.localizedDescription)\"}"
-                    connection.send(content: errResp.data(using: .utf8), completion: .contentProcessed{ error in
-                        if let error = error {
-                            print("   ⚠️ Failed to send error response: \(error)")
-                            connection.cancel()
-                        }
-                    })
-                } else {
-                    // Stream 模式下发生错误，发送错误内容
+                print("❌ Streaming Error: \(error)")
+                if stream {
                     let errChunk = "data: {\"choices\":[{\"delta\":{\"content\":\" [Error: \(error.localizedDescription)]\"}}]}\n\ndata: [DONE]\n\n"
-                    connection.send(content: errChunk.data(using: .utf8), completion: .contentProcessed{ error in
-                        if let error = error {
-                            print("   ⚠️ Failed to send error chunk: \(error)")
-                            connection.cancel()
-                        }
-                    })
+                    connection.send(content: errChunk.data(using: .utf8), completion: .contentProcessed{ _ in })
+                } else {
+                    let errResp = "HTTP/1.1 500 Error\r\nConnection: keep-alive\r\n\r\n{\"error\": \"\(error.localizedDescription)\"}"
+                    connection.send(content: errResp.data(using: .utf8), completion: .contentProcessed{ _ in })
                 }
             }
         }

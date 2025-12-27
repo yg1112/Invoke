@@ -200,57 +200,7 @@ struct FlowAnimationView: View {
     }
 }
 
-// MARK: - 模式选择卡片
-struct ModeOptionCard: View {
-    let mode: GeminiLinkLogic.GitMode
-    let selected: Bool
-    let onSelect: () -> Void
-    
-    var body: some View {
-        Button(action: onSelect) {
-            HStack(spacing: 12) {
-                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                    .foregroundColor(selected ? .blue : .secondary)
-                    .font(.title3)
-                
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(mode.rawValue)
-                        .font(.headline)
-                        .foregroundColor(.primary)
-                    
-                    Text(mode.description)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                
-                Spacer()
-                
-                modeIcon
-                    .foregroundColor(mode.color)
-            }
-            .padding()
-            .background(selected ? Color.blue.opacity(0.1) : Color.black.opacity(0.05))
-            .cornerRadius(12)
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(selected ? Color.blue : Color.clear, lineWidth: 2)
-            )
-        }
-        .buttonStyle(.plain)
-    }
-    
-    var modeIcon: some View {
-        switch mode {
-        case .localOnly:
-            return Image(systemName: "lock.shield.fill")
-        case .safe:
-            return Image(systemName: "arrow.triangle.branch")
-        case .yolo:
-            return Image(systemName: "bolt.fill")
-        }
-    }
-}
+// MARK: - INVISIBLE BRIDGE: ModeOptionCard removed - Aider handles all Git logic
 
 struct PermissionRow: View {
     let icon: String
@@ -307,20 +257,4 @@ struct InstructionRow: View {
     }
 }
 
-// 扩展 GitMode（仅添加 UI 相关属性）
-extension GeminiLinkLogic.GitMode {
-    var color: Color {
-        switch self {
-        case .localOnly:
-            return .gray
-        case .safe:
-            return .orange
-        case .yolo:
-            return .red
-        }
-    }
-    
-    var needsGitPermission: Bool {
-        self != .localOnly
-    }
-}
+// INVISIBLE BRIDGE: GitMode extension removed - Aider handles all Git operations

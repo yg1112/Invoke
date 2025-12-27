@@ -5,7 +5,7 @@ struct ContentView: View {
     @StateObject private var bridgeService = BridgeService.shared
     @StateObject private var aiderService = AiderService.shared
     @StateObject private var webManager = GeminiWebManager.shared
-    private let linkLogic = GeminiLinkLogic.shared
+    // INVISIBLE BRIDGE: Removed linkLogic - Aider handles all logic
     @State private var inputText = ""
     @State private var projectPath = UserDefaults.standard.string(forKey: "ProjectRoot") ?? ""
 @State private var isAlwaysOnTop = true
@@ -54,15 +54,9 @@ var body: some View {
             toggleAlwaysOnTop()
             // App 启动时自动启动 Bridge
             bridgeService.startBridge()
-            
-            // 确保 GeminiLinkLogic 的项目根目录已设置（触发监听启动）
-            if !projectPath.isEmpty && linkLogic.projectRoot != projectPath {
-                linkLogic.projectRoot = projectPath
-            } else if !projectPath.isEmpty && !linkLogic.isListening {
-                // 如果项目根目录已设置但监听未启动，手动启动
-                linkLogic.startListening()
-            }
-            
+
+            // INVISIBLE BRIDGE: Removed GeminiLinkLogic setup - Aider handles all logic
+
             // 如果已有 projectPath，启动 Aider
             if !projectPath.isEmpty {
                 aiderService.startAider(projectPath: projectPath)
@@ -276,10 +270,9 @@ var body: some View {
             if panel.runModal() == .OK, let url = panel.url {
                 self.projectPath = url.path
                 UserDefaults.standard.set(url.path, forKey: "ProjectRoot")
-                
-                // 更新 GeminiLinkLogic 的项目根目录（触发监听启动）
-                GeminiLinkLogic.shared.projectRoot = url.path
-                
+
+                // INVISIBLE BRIDGE: Removed GeminiLinkLogic update - Aider handles all logic
+
                 // 重启 Aider 使用新路径
                 aiderService.stop()
                 aiderService.clearMessages()

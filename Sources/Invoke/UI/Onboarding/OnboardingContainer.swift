@@ -16,7 +16,7 @@ struct OnboardingContainer: View {
     @AppStorage("hasCompletedOnboarding") var hasCompletedOnboarding: Bool = false
     @StateObject private var permissions = PermissionsManager.shared
     @State private var currentStep = 0
-    @State private var selectedMode: GeminiLinkLogic.GitMode = .localOnly
+    // INVISIBLE BRIDGE: Removed selectedMode - Aider handles all Git operations
     @Environment(\.closeOnboarding) var closeOnboarding
     
     var body: some View {
@@ -26,12 +26,10 @@ struct OnboardingContainer: View {
             } else if currentStep == 1 {
                 animationDemoView
             } else if currentStep == 2 {
-                modeSelectionView
-            } else if currentStep == 3 {
+                // INVISIBLE BRIDGE: Skip mode selection - Aider handles all Git
                 accessibilityPermissionView
-            } else if currentStep == 4 {
-                gitPermissionsView
-            } else if currentStep == 5 {
+            } else if currentStep == 3 {
+                // INVISIBLE BRIDGE: Skip git permissions - Aider handles all Git
                 geminiSetupView
             }
         }
@@ -135,67 +133,9 @@ struct OnboardingContainer: View {
     }
     
     // MARK: - Step 2: Mode Selection
+    // INVISIBLE BRIDGE: Mode selection removed - Aider handles all Git operations
     var modeSelectionView: some View {
-        VStack(spacing: 24) {
-            VStack(spacing: 8) {
-                Image(systemName: "slider.horizontal.3")
-                    .font(.system(size: 50))
-                    .foregroundColor(.blue)
-                
-                Text("Choose Your Mode")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                
-                Text("You can change this anytime")
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-            }
-            
-            VStack(spacing: 12) {
-                ModeOptionCard(
-                    mode: .localOnly,
-                    selected: selectedMode == .localOnly,
-                    onSelect: { selectedMode = .localOnly }
-                )
-                
-                ModeOptionCard(
-                    mode: .safe,
-                    selected: selectedMode == .safe,
-                    onSelect: { selectedMode = .safe }
-                )
-                
-                ModeOptionCard(
-                    mode: .yolo,
-                    selected: selectedMode == .yolo,
-                    onSelect: { selectedMode = .yolo }
-                )
-            }
-            .padding(.horizontal)
-            
-            Spacer()
-            
-            Button(action: {
-                withAnimation { currentStep = 3 }
-            }) {
-                Text("Continue")
-                    .font(.headline)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.horizontal, 60)
-            
-            Button(action: { withAnimation { currentStep = 1 } }) {
-                Text("Back")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            
-            Spacer().frame(height: 10)
-        }
-        .padding()
+        Text("Skipped")
     }
     
     // MARK: - Step 3: Accessibility Permission
@@ -260,8 +200,9 @@ struct OnboardingContainer: View {
             
             if permissions.accessibilityPermission.isGranted {
                 Button(action: {
-                    withAnimation { 
-                        currentStep = selectedMode.needsGitPermission ? 4 : 5 
+                    withAnimation {
+                        // INVISIBLE BRIDGE: Skip to Gemini setup (step 3 in simplified flow)
+                        currentStep = 3
                     }
                 }) {
                     HStack {
@@ -318,97 +259,9 @@ struct OnboardingContainer: View {
     }
     
     // MARK: - Step 4: Git Permissions
+    // INVISIBLE BRIDGE: Git permissions removed - never shown in flow
     var gitPermissionsView: some View {
-        VStack(spacing: 24) {
-            Spacer()
-            
-            Image(systemName: "key.fill")
-                .resizable()
-                .aspectRatio(contentMode: .fit)
-                .frame(width: 70, height: 70)
-                .foregroundStyle(
-                    LinearGradient(
-                        colors: [.blue, .purple],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-            
-            VStack(spacing: 8) {
-                Text("Git Access Required")
-                    .font(.title2)
-                    .fontWeight(.bold)
-                
-                Text("Mode: \(selectedMode.rawValue)")
-                    .font(.callout)
-                    .foregroundColor(.blue)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .background(Color.blue.opacity(0.1))
-                    .cornerRadius(8)
-                
-                Text("Your selected mode requires Git credentials to push changes")
-                    .multilineTextAlignment(.center)
-                    .font(.callout)
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal)
-            }
-            
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 12) {
-                    Image(systemName: "lock.shield")
-                        .font(.title2)
-                        .foregroundColor(.blue)
-                    
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("GitHub/GitLab Credentials")
-                            .fontWeight(.semibold)
-                        Text("Required for push operations (\(selectedMode.description))")
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                    
-                    Spacer()
-                }
-            }
-            .padding()
-            .background(Color.black.opacity(0.1))
-            .cornerRadius(12)
-            .padding(.horizontal)
-            
-            Text("Git credentials will be requested when you first push changes.")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal)
-            
-            Spacer()
-            
-            Button(action: {
-                withAnimation { currentStep = 5 }
-            }) {
-                HStack {
-                    Text("Continue")
-                    Image(systemName: "arrow.right")
-                }
-                .font(.headline)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 12)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .padding(.horizontal, 60)
-            
-            Button(action: { withAnimation { currentStep = 3 } }) {
-                Text("Back")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
-            .buttonStyle(.plain)
-            
-            Spacer().frame(height: 10)
-        }
-        .padding()
+        Text("Skipped")
     }
     
     // MARK: - Step 5: Gemini Setup (Redesigned & Premium)
@@ -497,9 +350,9 @@ struct OnboardingContainer: View {
             
             // Action Button
             Button(action: {
-                UserDefaults.standard.set(selectedMode.rawValue, forKey: "GitMode")
+                // INVISIBLE BRIDGE: No GitMode to save - Aider handles all Git
                 hasCompletedOnboarding = true
-                
+
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
                     closeOnboarding()
                 }
