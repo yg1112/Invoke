@@ -4,8 +4,7 @@ import ApplicationServices
 struct ContentView: View {
     @StateObject private var bridgeService = BridgeService.shared
     @StateObject private var aiderService = AiderService.shared
-    @StateObject private var webManager = GeminiWebManager.shared
-    // INVISIBLE BRIDGE: Removed linkLogic - Aider handles all logic
+    // INVISIBLE BRIDGE: webManager removed - only accessed via LocalAPIServer
     @State private var inputText = ""
     @State private var projectPath = UserDefaults.standard.string(forKey: "ProjectRoot") ?? ""
 @State private var isAlwaysOnTop = true
